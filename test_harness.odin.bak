@@ -1,0 +1,440 @@
+package editor
+
+import "core:fmt"
+import "core:strings"
+
+// ---------------------------------------------------------------------------
+// Test harness — run with: odin run .
+//
+// This validates the data layer before any rendering code exists.
+// Each test prints PASS or FAIL with details.
+// ---------------------------------------------------------------------------
+
+main :: proc() {
+    fmt.println("=== Piece Table Test Harness ===")
+    fmt.println()
+
+    pass_count := 0
+    fail_count := 0
+
+    check :: proc(name: string, condition: bool, pass_count: ^int, fail_count: ^int) {
+        if condition {
+            fmt.printf("  PASS: %s\n", name)
+            pass_count^ += 1
+        } else {
+            fmt.printf("  FAIL: %s\n", name)
+            fail_count^ += 1
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 1: Initialize with content
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 1: Initialization ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "Hello, World!")
+        defer piece_table_destroy(&pt)
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("initial content matches",
+              content == "Hello, World!", &pass_count, &fail_count)
+        check("doc_length is correct",
+              pt.doc_length == 13, &pass_count, &fail_count)
+        check("single piece",
+              len(pt.pieces) == 1, &pass_count, &fail_count)
+        check("total_lines is 1 (no newlines)",
+              pt.total_lines == 1, &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 2: Insert at beginning
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 2: Insert at beginning ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "World")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op := execute_insert(&pt, 0, "Hello, ", 0, 1000)
+        undo_stack_push(&us, &pt, op)
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("insert at beginning",
+              content == "Hello, World", &pass_count, &fail_count)
+        check("doc_length updated",
+              pt.doc_length == 12, &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 3: Insert in middle
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 3: Insert in middle ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "Helo")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op := execute_insert(&pt, 2, "l", 2, 1000)
+        undo_stack_push(&us, &pt, op)
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("insert in middle",
+              content == "Hello", &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 4: Insert at end
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 4: Insert at end ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "Hello")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op := execute_insert(&pt, 5, ", World!", 5, 1000)
+        undo_stack_push(&us, &pt, op)
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("insert at end",
+              content == "Hello, World!", &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 5: Delete from middle
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 5: Delete from middle ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "Hello, World!")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op := execute_delete(&pt, 5, 7, 7, 1000)  // delete ", "
+        undo_stack_push(&us, &pt, op)
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("delete from middle",
+              content == "HelloWorld!", &pass_count, &fail_count)
+        check("doc_length after delete",
+              pt.doc_length == 11, &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 6: Undo insert
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 6: Undo insert ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "Hello")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op := execute_insert(&pt, 5, " World", 5, 1000)
+        undo_stack_push(&us, &pt, op)
+
+        content1 := piece_table_content(&pt)
+        check("before undo",
+              content1 == "Hello World", &pass_count, &fail_count)
+        delete(content1)
+
+        cursor := undo_stack_undo(&us, &pt)
+
+        content2 := piece_table_content(&pt)
+        check("after undo insert",
+              content2 == "Hello", &pass_count, &fail_count)
+        check("cursor restored",
+              cursor == 5, &pass_count, &fail_count)
+        delete(content2)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 7: Undo delete
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 7: Undo delete ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "Hello, World!")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op := execute_delete(&pt, 5, 7, 7, 1000)
+        undo_stack_push(&us, &pt, op)
+
+        undo_stack_undo(&us, &pt)
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("undo delete restores content",
+              content == "Hello, World!", &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 8: Redo after undo
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 8: Redo after undo ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "Hello")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op := execute_insert(&pt, 5, " World", 5, 1000)
+        undo_stack_push(&us, &pt, op)
+
+        undo_stack_undo(&us, &pt)
+        cursor := undo_stack_redo(&us, &pt)
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("redo restores insert",
+              content == "Hello World", &pass_count, &fail_count)
+        check("redo cursor position",
+              cursor == 11, &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 9: Branch pruning — new op after undo discards undone ops
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 9: Branch pruning ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "ABC")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op1 := execute_insert(&pt, 3, "D", 3, 1000)
+        undo_stack_push(&us, &pt, op1)
+        // Content: ABCD
+
+        op2 := execute_insert(&pt, 4, "E", 4, 2000)
+        undo_stack_push(&us, &pt, op2)
+        // Content: ABCDE
+
+        undo_stack_undo(&us, &pt)  // undo E -> ABCD
+        undo_stack_undo(&us, &pt)  // undo D -> ABC
+
+        // Now type something new — should discard D and E
+        op3 := execute_insert(&pt, 3, "X", 3, 3000)
+        undo_stack_push(&us, &pt, op3)
+        // Content: ABCX
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("branch: new content after undo",
+              content == "ABCX", &pass_count, &fail_count)
+        check("branch: redo not available",
+              !undo_stack_can_redo(&us), &pass_count, &fail_count)
+        check("branch: stack has one op",
+              us.position == 1, &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 10: Operation merging — fast sequential inserts
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 10: Operation merging ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        // Type "Hello" one character at a time, all within merge window
+        chars := [?]string{"H", "e", "l", "l", "o"}
+        for i := 0; i < 5; i += 1 {
+            op := execute_insert(&pt, i, chars[i], i, i64(1000 + i * 50))
+            undo_stack_push(&us, &pt, op)
+        }
+
+        content1 := piece_table_content(&pt)
+        check("merged inserts produce correct content",
+              content1 == "Hello", &pass_count, &fail_count)
+        check("merged into single undo step",
+              us.position == 1, &pass_count, &fail_count)
+        delete(content1)
+
+        // One undo should remove all five characters
+        undo_stack_undo(&us, &pt)
+
+        content2 := piece_table_content(&pt)
+        check("single undo removes merged inserts",
+              content2 == "", &pass_count, &fail_count)
+        delete(content2)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 11: Newline counting
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 11: Newline counting ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "Line 1\nLine 2\nLine 3")
+        defer piece_table_destroy(&pt)
+
+        check("three lines detected",
+              pt.total_lines == 3, &pass_count, &fail_count)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        op := execute_insert(&pt, 20, "\nLine 4", 20, 1000)
+        undo_stack_push(&us, &pt, op)
+
+        check("four lines after insert",
+              pt.total_lines == 4, &pass_count, &fail_count)
+
+        undo_stack_undo(&us, &pt)
+        check("back to three lines after undo",
+              pt.total_lines == 3, &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 12: Empty document operations
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 12: Empty document ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        check("empty doc length is 0",
+              pt.doc_length == 0, &pass_count, &fail_count)
+        check("empty doc has 1 line",
+              pt.total_lines == 1, &pass_count, &fail_count)
+
+        op := execute_insert(&pt, 0, "First!", 0, 1000)
+        undo_stack_push(&us, &pt, op)
+
+        content := piece_table_content(&pt)
+        defer delete(content)
+
+        check("insert into empty doc",
+              content == "First!", &pass_count, &fail_count)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Test 13: Multiple sequential operations
+    // -----------------------------------------------------------------------
+    fmt.println("--- Test 13: Multiple sequential operations ---")
+    {
+        pt: Piece_Table
+        piece_table_init(&pt, "The quick fox")
+        defer piece_table_destroy(&pt)
+
+        us: Undo_Stack
+        undo_stack_init(&us)
+        defer undo_stack_destroy(&us)
+
+        // Insert "brown " before "fox"
+        op1 := execute_insert(&pt, 10, "brown ", 10, 1000)
+        undo_stack_push(&us, &pt, op1)
+
+        content1 := piece_table_content(&pt)
+        check("first insert",
+              content1 == "The quick brown fox", &pass_count, &fail_count)
+        delete(content1)
+
+        // Insert " jumps" at end
+        op2 := execute_insert(&pt, 19, " jumps", 19, 2000)
+        undo_stack_push(&us, &pt, op2)
+
+        content2 := piece_table_content(&pt)
+        check("second insert",
+              content2 == "The quick brown fox jumps", &pass_count, &fail_count)
+        delete(content2)
+
+        // Undo second insert
+        undo_stack_undo(&us, &pt)
+        content3 := piece_table_content(&pt)
+        check("undo second insert",
+              content3 == "The quick brown fox", &pass_count, &fail_count)
+        delete(content3)
+
+        // Undo first insert
+        undo_stack_undo(&us, &pt)
+        content4 := piece_table_content(&pt)
+        check("undo first insert",
+              content4 == "The quick fox", &pass_count, &fail_count)
+        delete(content4)
+
+        // Redo both
+        undo_stack_redo(&us, &pt)
+        undo_stack_redo(&us, &pt)
+        content5 := piece_table_content(&pt)
+        check("redo both",
+              content5 == "The quick brown fox jumps", &pass_count, &fail_count)
+        delete(content5)
+    }
+    fmt.println()
+
+    // -----------------------------------------------------------------------
+    // Summary
+    // -----------------------------------------------------------------------
+    fmt.println("=== Results ===")
+    fmt.printf("  %d passed, %d failed\n", pass_count, fail_count)
+    if fail_count == 0 {
+        fmt.println("  All tests passed. Data layer is solid.")
+    } else {
+        fmt.println("  Some tests failed. Fix before proceeding to rendering.")
+    }
+}

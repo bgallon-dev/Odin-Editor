@@ -56,20 +56,20 @@ def session_db():
 def new_session(conn: sqlite3.Connection) -> int:
     sid = conn.execute(
         "INSERT INTO sessions (started_at) VALUES (datetime('now'))"
-    ).lastrowid
+    ).lastrowid or 0
     conn.commit()
     return sid
 
 
 def log_event(conn: sqlite3.Connection, session_id: int,
               event_type: str, file_path: str = "test.py",
-              payload: dict = None) -> int:
+              payload: dict | None = None) -> int:
     eid = conn.execute(
         "INSERT INTO events (session_id, timestamp, event_type, file_path, payload) "
         "VALUES (?, unixepoch('now', 'subsec'), ?, ?, ?)",
         (session_id, event_type, file_path,
          json.dumps(payload or {}))
-    ).lastrowid
+    ).lastrowid or 0
     conn.execute(
         "UPDATE sessions SET event_count = event_count + 1 WHERE id = ?",
         (session_id,)
@@ -79,7 +79,7 @@ def log_event(conn: sqlite3.Connection, session_id: int,
 
 
 def compute_accept_rate(conn: sqlite3.Connection,
-                        session_id: int = None) -> float:
+                        session_id: int | None = None) -> float:
     """
     Compute accept rate for a session or globally.
     Returns accepted / (accepted + dismissed) or 0.0 if no drafts.

@@ -220,7 +220,7 @@ class TestDatabaseLatency:
         session_id = conn.execute(
             "INSERT INTO sessions (started_at, file_scope) "
             "VALUES (datetime('now'), '[]')"
-        ).lastrowid
+        ).lastrowid or 0
         conn.commit()
         ms = elapsed_ms(t0)
 

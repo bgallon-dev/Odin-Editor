@@ -334,7 +334,7 @@ def extract_symbols(file_path: str, source: str) -> list[SymbolInfo]:
     return symbols
 
 
-def _format_function_sig(node: ast.FunctionDef) -> str:
+def _format_function_sig(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     """Build a readable function signature from an AST node."""
     args = []
     all_args = node.args
@@ -446,7 +446,7 @@ def sync_symbols_for_file(conn: sqlite3.Connection, file_path: str,
 def create_session(conn: sqlite3.Connection) -> int:
     cur = conn.execute("INSERT INTO sessions DEFAULT VALUES")
     conn.commit()
-    return cur.lastrowid
+    return cur.lastrowid or 0
 
 
 def close_session(conn: sqlite3.Connection, session_id: int):
@@ -458,7 +458,7 @@ def close_session(conn: sqlite3.Connection, session_id: int):
 
 
 def record_event(conn: sqlite3.Connection, session_id: int, event_type: str,
-                 file_path: str = "", payload: dict = None):
+                 file_path: str = "", payload: dict | None = None):
     conn.execute(
         "INSERT INTO events (session_id, event_type, file_path, payload) VALUES (?, ?, ?, ?)",
         (session_id, event_type, file_path, json.dumps(payload or {})),
@@ -516,15 +516,17 @@ def log(msg: str):
 class KettleServer:
     def __init__(self, project_db_path: str, global_db_path: str,
                  host: str = "127.0.0.1", port: int = 9999,
-                 project_root: str = "."):
+                 project_root: str = ".",
+                 parent_pid: Optional[int] = None):
         self.host = host
         self.port = port
         self.project_root = os.path.abspath(project_root)
         self.project_db_path = project_db_path
         self.global_db_path = global_db_path
-        self.project_db: Optional[sqlite3.Connection] = None
-        self.global_db: Optional[sqlite3.Connection] = None
+        self.project_db: sqlite3.Connection
+        self.global_db: sqlite3.Connection
         self.session_id: Optional[int] = None
+        self.parent_pid = parent_pid
         self.running = False
 
     def initialize(self):
@@ -568,6 +570,11 @@ class KettleServer:
         log(f"listening on {self.host}:{self.port}")
         self.signal_ready()
 
+        # Start parent-process watchdog if parent PID was provided
+        if self.parent_pid is not None:
+            watchdog = threading.Thread(target=self._watch_parent, daemon=True)
+            watchdog.start()
+
         try:
             while self.running:
                 try:
@@ -583,11 +590,39 @@ class KettleServer:
             sock.close()
             if self.session_id is not None:
                 close_session(self.project_db, self.session_id)
-            if self.project_db:
-                self.project_db.close()
-            if self.global_db:
-                self.global_db.close()
+            self.project_db.close()
+            self.global_db.close()
             log("server shut down")
+
+    def _watch_parent(self):
+        """Periodically check if the parent editor process is still alive.
+        If it has died, initiate graceful shutdown."""
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+
+        kernel32 = ctypes.windll.kernel32
+
+        while self.running:
+            time.sleep(2)
+
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, self.parent_pid
+            )
+            if handle == 0:
+                log(f"parent process {self.parent_pid} gone, shutting down")
+                self.running = False
+                return
+
+            exit_code = ctypes.c_ulong()
+            kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            kernel32.CloseHandle(handle)
+
+            if exit_code.value != STILL_ACTIVE:
+                log(f"parent process {self.parent_pid} exited (code={exit_code.value}), shutting down")
+                self.running = False
+                return
 
     def handle_client(self, client: socket.socket):
         """Handle a single client connection with line-delimited JSON."""
@@ -870,6 +905,8 @@ def main():
                         help="Port to listen on")
     parser.add_argument("--project-root", default=".",
                         help="Project root directory")
+    parser.add_argument("--parent-pid", type=int, default=None,
+                        help="PID of the parent editor process (for orphan detection)")
     args = parser.parse_args()
 
     server = KettleServer(
@@ -878,6 +915,7 @@ def main():
         host=args.host,
         port=args.port,
         project_root=args.project_root,
+        parent_pid=args.parent_pid,
     )
 
     try:

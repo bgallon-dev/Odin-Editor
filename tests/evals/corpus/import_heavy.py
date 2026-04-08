@@ -29,3 +29,4 @@ def build_context_payload(
     Reads the file, assembles symbols from the database,
     and returns a formatted prompt string.
     """
+    ...

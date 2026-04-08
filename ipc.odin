@@ -9,6 +9,53 @@ import "core:path/filepath"
 import win32 "core:sys/windows"
 
 // ---------------------------------------------------------------------------
+// Job Object API — not in core:sys/windows, declared via foreign import
+// ---------------------------------------------------------------------------
+when ODIN_OS == .Windows {
+    foreign import kernel32 "system:Kernel32.lib"
+
+    @(default_calling_convention = "system")
+    foreign kernel32 {
+        CreateJobObjectW         :: proc(lpJobAttributes: ^win32.SECURITY_ATTRIBUTES, lpName: win32.LPCWSTR) -> win32.HANDLE ---
+        AssignProcessToJobObject :: proc(hJob: win32.HANDLE, hProcess: win32.HANDLE) -> win32.BOOL ---
+        SetInformationJobObject  :: proc(hJob: win32.HANDLE, JobObjectInformationClass: i32, lpJobObjectInformation: rawptr, cbJobObjectInformationLength: win32.DWORD) -> win32.BOOL ---
+    }
+
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE :: 0x00002000
+    JobObjectExtendedLimitInformation   :: 9
+
+    IO_COUNTERS :: struct {
+        ReadOperationCount:  u64,
+        WriteOperationCount: u64,
+        OtherOperationCount: u64,
+        ReadTransferCount:   u64,
+        WriteTransferCount:  u64,
+        OtherTransferCount:  u64,
+    }
+
+    JOBOBJECT_BASIC_LIMIT_INFORMATION :: struct {
+        PerProcessUserTimeLimit: win32.LARGE_INTEGER,
+        PerJobUserTimeLimit:     win32.LARGE_INTEGER,
+        LimitFlags:              win32.DWORD,
+        MinimumWorkingSetSize:   win32.SIZE_T,
+        MaximumWorkingSetSize:   win32.SIZE_T,
+        ActiveProcessLimit:      win32.DWORD,
+        Affinity:                win32.ULONG_PTR,
+        PriorityClass:           win32.DWORD,
+        SchedulingClass:         win32.DWORD,
+    }
+
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION :: struct {
+        BasicLimitInformation:  JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        IoInfo:                 IO_COUNTERS,
+        ProcessMemoryLimit:     win32.SIZE_T,
+        JobMemoryLimit:         win32.SIZE_T,
+        PeakProcessMemoryUsed:  win32.SIZE_T,
+        PeakJobMemoryUsed:      win32.SIZE_T,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IPC message types
 // ---------------------------------------------------------------------------
 IPC_Message_Kind :: enum u8 {
@@ -95,6 +142,7 @@ IPC_Connection :: struct {
     symbol_count:  int,
     project_root:  string,
     server_process: win32.HANDLE,
+    job_object:     win32.HANDLE,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +159,7 @@ ipc_init :: proc(conn: ^IPC_Connection, host: string, port: int) {
     conn.symbol_count = 0
     conn.project_root = ""
     conn.server_process = nil
+    conn.job_object = nil
 }
 
 ipc_destroy :: proc(conn: ^IPC_Connection) {
@@ -120,6 +169,19 @@ ipc_destroy :: proc(conn: ^IPC_Connection) {
         ipc_disconnect(conn)
     }
     delete(conn.recv_buf)
+
+    // Terminate the Python server process so it doesn't outlive the editor
+    when ODIN_OS == .Windows {
+        if conn.server_process != nil {
+            win32.TerminateProcess(conn.server_process, 0)
+            win32.CloseHandle(conn.server_process)
+            conn.server_process = nil
+        }
+        if conn.job_object != nil {
+            win32.CloseHandle(conn.job_object)
+            conn.job_object = nil
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,8 +236,6 @@ spawn_server :: proc(conn: ^IPC_Connection) -> bool {
     // Build command line
     project_db := filepath.join({kettle_dir, "memory.db"})
 
-    // Use a temporary buffer to build the command line
-    cmd_buf: [2048]u8
     home_dir := os.get_env("USERPROFILE")
     if len(home_dir) == 0 do home_dir = os.get_env("HOME")
     global_db_dir := filepath.join({home_dir, ".kettle"})
@@ -195,9 +255,10 @@ spawn_server :: proc(conn: ^IPC_Connection) -> bool {
         return false
     }
 
-    cmd := fmt.tprintf(
-        "python \"%s\" --project-db \"%s\" --global-db \"%s\" --port %d --project-root \"%s\"",
-        server_script, project_db, global_db, conn.port, project_root,
+    parent_pid := win32.GetCurrentProcessId()
+    cmd_args := fmt.tprintf(
+        "\"%s\" --project-db \"%s\" --global-db \"%s\" --port %d --project-root \"%s\" --parent-pid %d",
+        server_script, project_db, global_db, conn.port, project_root, parent_pid,
     )
 
     // Clean up allocated strings
@@ -207,32 +268,41 @@ spawn_server :: proc(conn: ^IPC_Connection) -> bool {
     if len(home_dir) > 0 do delete(home_dir)
 
     // Launch the process using CreateProcessW (Windows)
+    // Try py (Windows launcher), then python, then python3
     when ODIN_OS == .Windows {
         si: win32.STARTUPINFOW
         si.cb = size_of(win32.STARTUPINFOW)
         pi: win32.PROCESS_INFORMATION
 
-        // Convert command to wide string
-        cmd_wide := win32.utf8_to_wstring(cmd)
-
-        // CREATE_NO_WINDOW = 0x08000000
         CREATE_NO_WINDOW : win32.DWORD : 0x08000000
 
-        ok := win32.CreateProcessW(
-            nil,              // lpApplicationName
-            cmd_wide,         // lpCommandLine
-            nil,              // lpProcessAttributes
-            nil,              // lpThreadAttributes
-            false,            // bInheritHandles
-            CREATE_NO_WINDOW, // dwCreationFlags
-            nil,              // lpEnvironment
-            nil,              // lpCurrentDirectory
-            &si,              // lpStartupInfo
-            &pi,              // lpProcessInformation
-        )
+        python_cmds := [?]string{"py", "python", "python3"}
+        launched := false
+        for py_cmd in python_cmds {
+            cmd := fmt.tprintf("%s %s", py_cmd, cmd_args)
+            cmd_wide := win32.utf8_to_wstring(cmd)
 
-        if ok == false {
-            conn.last_error = "failed to spawn Python server"
+            ok := win32.CreateProcessW(
+                nil,              // lpApplicationName
+                cmd_wide,         // lpCommandLine
+                nil,              // lpProcessAttributes
+                nil,              // lpThreadAttributes
+                false,            // bInheritHandles
+                CREATE_NO_WINDOW, // dwCreationFlags
+                nil,              // lpEnvironment
+                nil,              // lpCurrentDirectory
+                &si,              // lpStartupInfo
+                &pi,              // lpProcessInformation
+            )
+
+            if ok {
+                launched = true
+                break
+            }
+        }
+
+        if !launched {
+            conn.last_error = "failed to spawn Python server (tried py, python, python3)"
             conn.status = .Error
             delete(ready_path)
             return false
@@ -240,6 +310,30 @@ spawn_server :: proc(conn: ^IPC_Connection) -> bool {
 
         conn.server_process = pi.hProcess
         win32.CloseHandle(pi.hThread)
+
+        // Create a Job Object with kill-on-close semantics.
+        // When the editor process terminates (for any reason), the OS closes
+        // all handles — including this Job Object — which automatically
+        // terminates the Python server process.
+        job := CreateJobObjectW(nil, nil)
+        if job != nil {
+            info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+
+            ok_info := SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info,
+                size_of(JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
+            )
+
+            if ok_info {
+                AssignProcessToJobObject(job, pi.hProcess)
+                conn.job_object = job
+            } else {
+                win32.CloseHandle(job)
+            }
+        }
     }
 
     // Wait for the ready file (poll up to 5 seconds)

@@ -47,6 +47,8 @@ Complete the code at <CURSOR>:"""
 VALIDATOR_SYSTEM = """You are a structural code reviewer. You receive a proposed code draft
 and must identify concrete issues across four categories.
 
+CRITICAL: Do not use a thinking trace or internal reasoning. Output ONLY the JSON lines immediately.
+
 For each issue found, output a JSON object on its own line with this exact schema:
 {{"category": "correctness|style|security|performance", "severity": "error|warning|info", "line": <int>, "message": "<string>"}}
 
@@ -75,6 +77,7 @@ File context (lines around cursor):
 # Result types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Finding:
     category: str
@@ -100,6 +103,7 @@ class PipelineResult:
 # Context assembly
 # ---------------------------------------------------------------------------
 
+
 def assemble_drafter_context(
     file_path: str,
     file_content: str,
@@ -123,7 +127,9 @@ def assemble_drafter_context(
     return before + "<CURSOR>" + after
 
 
-def extract_context_snippet(file_content: str, cursor_offset: int = 0, max_lines: int = 50) -> str:
+def extract_context_snippet(
+    file_content: str, cursor_offset: int = 0, max_lines: int = 50
+) -> str:
     """Lines centered around cursor position for the validator."""
     lines = file_content.split("\n")
     if not lines:
@@ -139,6 +145,7 @@ def extract_context_snippet(file_content: str, cursor_offset: int = 0, max_lines
 # ---------------------------------------------------------------------------
 # The pipeline
 # ---------------------------------------------------------------------------
+
 
 def run_pipeline(
     file_path: str,
@@ -167,6 +174,8 @@ def run_pipeline(
         timeout=TIMEOUT_DRAFTER,
         temperature=0.15,
         max_tokens=1024,
+        frequency_penalty=0.8,
+        presence_penalty=0.6,
     )
     drafter_ms = int((time.monotonic() - t0) * 1000)
 
@@ -214,15 +223,23 @@ def run_pipeline(
         user_prompt=validator_user,
         timeout=TIMEOUT_VALIDATOR,
         temperature=0.05,
-        max_tokens=2048,
+        max_tokens=32000,
     )
     validator_ms = int((time.monotonic() - t1) * 1000)
 
-    findings = parse_validator_output(
-        validator_resp.text if validator_resp.success else ""
-    )
+    # Primary: parse from content. Fallback: if content is empty but
+    # reasoning_content has JSON-shaped lines (thinking model used all
+    # tokens on reasoning), try to extract findings from there.
+    validator_text = ""
+    if validator_resp.success:
+        validator_text = validator_resp.text.strip()
+        if not validator_text and validator_resp.reasoning_content:
+            validator_text = validator_resp.reasoning_content
 
-    confidence = compute_confidence(draft_text, findings)
+    findings = parse_validator_output(validator_text)
+    validator_failed = validator_resp.success and not validator_resp.text.strip()
+
+    confidence = compute_confidence(draft_text, findings, validator_failed)
 
     return PipelineResult(
         success=True,
@@ -230,7 +247,8 @@ def run_pipeline(
         confidence=confidence,
         findings=findings,
         drafter_tokens=drafter_resp.prompt_tokens + drafter_resp.completion_tokens,
-        validator_tokens=validator_resp.prompt_tokens + validator_resp.completion_tokens,
+        validator_tokens=validator_resp.prompt_tokens
+        + validator_resp.completion_tokens,
         drafter_ms=drafter_ms,
         validator_ms=validator_ms,
     )
@@ -239,6 +257,7 @@ def run_pipeline(
 # ---------------------------------------------------------------------------
 # Validator output parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_validator_output(text: str) -> list[Finding]:
     """Parse line-delimited JSON findings. Tolerates malformed output."""
@@ -263,8 +282,14 @@ def parse_validator_output(text: str) -> list[Finding]:
     return findings
 
 
-def compute_confidence(draft_text: str, findings: list[Finding]) -> float:
+def compute_confidence(
+    draft_text: str, findings: list[Finding], validator_failed: bool = False
+) -> float:
     """Heuristic confidence score 0.0–1.0."""
+    # If the validator produced no usable output, we can't trust the draft
+    if validator_failed:
+        return 0.2
+
     score = 1.0
     for f in findings:
         if f.severity == "error":

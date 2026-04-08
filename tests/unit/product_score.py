@@ -63,7 +63,7 @@ class ProductScore:
             "consistency":           self.consistency,
             "performance_alignment": self.performance_alignment,
         }
-        limiting = min(factors, key=factors.get)
+        limiting = min(factors, key=factors.__getitem__)
         limiting_value = factors[limiting]
 
         if limiting_value < 0.3:

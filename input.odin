@@ -78,7 +78,11 @@ editor_update :: proc(ed: ^Editor_State) {
 
     // Ctrl+D = Request draft from memory system
     if ctrl_held && rl.IsKeyPressed(.D) {
-        if ipc_is_connected(&ed.ipc) && len(buf.save_path) > 0 {
+        if !ipc_is_connected(&ed.ipc) {
+            ed.warn_timer = 2.0
+        } else if len(buf.save_path) == 0 {
+            ed.warn_timer = 2.0
+        } else {
             memory_on_draft_request(&ed.ipc, buf)
             ed.side_panel.drafting = true
             ed.side_panel.draft_ready = false

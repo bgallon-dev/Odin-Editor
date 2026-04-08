@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS symbols (
     session_count INTEGER NOT NULL DEFAULT 1,
     UNIQUE(file_path, name, kind)
 );
+
+CREATE INDEX IF NOT EXISTS idx_symbols_file_session
+    ON symbols(file_path, session_count DESC, last_seen DESC);
 """
 
 GLOBAL_SCHEMA = """
@@ -514,26 +517,10 @@ def get_all_symbol_names(db: sqlite3.Connection) -> set[str]:
 def check_unknown_identifiers(draft_text: str, known_symbols: set[str]) -> list[str]:
     """Find identifiers in the draft that don't appear in known symbols."""
     import re
+    from odin_structural_gate import ODIN_KEYWORDS_AND_BUILTINS
     # Extract word-like tokens from the draft
     tokens = set(re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', draft_text))
-    # Filter out common Odin language keywords and builtins
-    odin_builtins = {
-        'proc', 'struct', 'enum', 'union', 'for', 'if', 'else', 'when',
-        'return', 'do', 'break', 'continue', 'switch', 'case', 'defer',
-        'using', 'import', 'package', 'foreign', 'where', 'distinct',
-        'dynamic', 'map', 'bit_set', 'matrix', 'or_else', 'or_return',
-        'true', 'false', 'nil',
-        'int', 'uint', 'i8', 'i16', 'i32', 'i64', 'i128',
-        'u8', 'u16', 'u32', 'u64', 'u128',
-        'f16', 'f32', 'f64', 'bool', 'string', 'cstring', 'rawptr',
-        'byte', 'rune', 'uintptr', 'typeid', 'any',
-        'len', 'cap', 'append', 'delete', 'make', 'new', 'free',
-        'size_of', 'align_of', 'offset_of', 'type_of', 'type_info_of',
-        'transmute', 'cast', 'auto_cast',
-        'i', 'j', 'k', 'v', 'ok', 'err', 'it', 'idx',
-        'context', 'allocator', 'temp_allocator',
-    }
-    unknown = tokens - known_symbols - odin_builtins
+    unknown = tokens - known_symbols - ODIN_KEYWORDS_AND_BUILTINS
     return sorted(unknown)
 
 
@@ -809,20 +796,26 @@ class KettleServer:
     def handle_draft_request(self, payload: dict) -> dict:
         file_path     = payload.get("file_path", "")
         cursor_offset = payload.get("cursor_offset", 0)
+        log(f"[DEBUG] handle_draft_request ENTRY: file={file_path} cursor_offset={cursor_offset}")
+        req_t0 = __import__('time').monotonic()
 
         # Read the file from disk
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 file_content = f.read()
+            log(f"[DEBUG] file read OK: {len(file_content)} chars")
         except (OSError, IOError) as e:
+            log(f"[DEBUG] file read FAILED: {e}")
             log(f"draft_request: could not read {file_path}: {e}")
             return self._draft_error(f"Could not read file: {e}")
 
         # Check LM Studio availability
         from lm_studio import check_lm_studio_available
         if not check_lm_studio_available():
+            log("[DEBUG] LM Studio availability check FAILED")
             log("draft_request: LM Studio not available")
             return self._draft_error("LM Studio is not running")
+        log("[DEBUG] LM Studio availability check PASSED")
 
         # Record the request event
         if self.session_id:
@@ -839,13 +832,16 @@ class KettleServer:
         symbol_str = "\n".join(
             f"  {s.kind} {s.signature}" for s in symbols
         ) if symbols else ""
+        log(f"[DEBUG] symbol context: {len(symbols)} symbols, {len(symbol_str)} chars")
 
         recent = get_recent_findings(self.project_db, file_path)
         past_findings_str = "\n".join(
             f"  - {f}" for f in recent[:5]
         ) if recent else ""
+        log(f"[DEBUG] past findings: {len(recent)} total, using {min(len(recent), 5)}")
 
         # Run the pipeline synchronously
+        log("[DEBUG] calling run_pipeline ...")
         from pipeline import run_pipeline
         result = run_pipeline(
             file_path=file_path,
@@ -854,6 +850,9 @@ class KettleServer:
             symbol_context=symbol_str,
             past_findings=past_findings_str,
         )
+        log(f"[DEBUG] run_pipeline returned: success={result.success} "
+            f"confidence={result.confidence:.3f} findings={len(result.findings)} "
+            f"structural_score={result.structural_score:.4f}")
 
         # Record the outcome
         if self.session_id:
@@ -879,17 +878,25 @@ class KettleServer:
             )
 
         # Structural validation: penalize confidence if too many unknown identifiers
-        if result.success and result.draft_text:
+        # Skip for .odin files — the structural gate already checks symbol overlap
+        if result.success and result.draft_text and not file_path.endswith(".odin"):
             all_symbols = get_all_symbol_names(self.project_db)
+            log(f"[DEBUG] post-pipeline identifier check: {len(all_symbols)} known symbols in DB")
             unknown = check_unknown_identifiers(result.draft_text, all_symbols)
             import re
             all_tokens = set(re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', result.draft_text))
+            log(f"[DEBUG] draft tokens: {len(all_tokens)} total, {len(unknown)} unknown")
             if all_tokens:
                 unknown_ratio = len(unknown) / len(all_tokens)
+                log(f"[DEBUG] unknown_ratio={unknown_ratio:.2%} (threshold=30%)")
                 if unknown_ratio > 0.3:
+                    log(f"[DEBUG] PENALTY: confidence {result.confidence:.3f} ->"
+                        f"{max(0.0, result.confidence - 0.4):.3f}")
                     log(f"structural check: {len(unknown)}/{len(all_tokens)} "
                         f"identifiers unknown ({unknown_ratio:.0%}): {unknown[:10]}")
                     result.confidence = max(0.0, result.confidence - 0.4)
+        elif file_path.endswith(".odin"):
+            log(f"[DEBUG] skipping identifier penalty for .odin file (structural gate handles it)")
 
         log(
             f"pipeline complete: success={result.success} "
@@ -912,6 +919,7 @@ class KettleServer:
             "findings_count": len(result.findings),
             "drafter_ms":     result.drafter_ms,
             "validator_ms":   result.validator_ms,
+            "structural_score": result.structural_score,
             "error":          result.error,
         }
 
@@ -923,6 +931,9 @@ class KettleServer:
             resp_payload[f"finding_{i}_line"]      = f.line
             resp_payload[f"finding_{i}_message"]   = f.message
 
+        req_elapsed = int((__import__('time').monotonic() - req_t0) * 1000)
+        log(f"[DEBUG] handle_draft_request EXIT: total={req_elapsed}ms "
+            f"response_keys={list(resp_payload.keys())}")
         return {"type": "draft_response", "payload": resp_payload}
 
     def _draft_error(self, error_msg: str) -> dict:

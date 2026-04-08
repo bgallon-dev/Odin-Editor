@@ -89,6 +89,11 @@ def build_large_symbol_db(n_symbols: int = 10_000) -> sqlite3.Connection:
         )
     """)
 
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_symbols_file_session
+            ON symbols(file_path, session_count DESC, last_seen DESC)
+    """)
+
     # Insert N symbols across 100 files
     rows = []
     for i in range(n_symbols):
@@ -125,6 +130,10 @@ class TestDatabaseLatency:
         must complete within 10ms.
         """
         conn = build_large_symbol_db(10_000)
+
+        # Warmup: first query in a cold process includes SQLite page-cache
+        # init overhead that isn't representative of steady-state latency.
+        conn.execute("SELECT 1 FROM symbols LIMIT 1").fetchone()
 
         t0 = time.monotonic()
         rows = conn.execute(

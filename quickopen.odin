@@ -9,7 +9,6 @@ import "core:path/filepath"
 // ---------------------------------------------------------------------------
 // Quick Open state
 // ---------------------------------------------------------------------------
-QUICKOPEN_MAX_RESULTS :: 15
 
 Quick_Open :: struct {
     active:       bool,
@@ -80,7 +79,7 @@ quick_open_filter :: proc(qo: ^Quick_Open) {
     query := string(qo.query_buf[:qo.query_len])
 
     for &fp in qo.all_files {
-        if len(qo.results) >= QUICKOPEN_MAX_RESULTS do break
+        if len(qo.results) >= cfg.quickopen_max_results do break
 
         if qo.query_len == 0 {
             append(&qo.results, fp)
@@ -191,14 +190,14 @@ quick_open_render :: proc(qo: ^Quick_Open, font: rl.Font, char_width: f32, win_w
     field_y := box_y + 8
     prompt := "> "
     prompt_cstr := strings.clone_to_cstring(prompt, context.temp_allocator)
-    rl.DrawTextEx(font, prompt_cstr, {f32(box_x + 12), f32(field_y)}, FONT_SIZE, spacing, rl.Color{100, 100, 100, 255})
+    rl.DrawTextEx(font, prompt_cstr, {f32(box_x + 12), f32(field_y)}, f32(cfg.font_size), spacing, rl.Color{100, 100, 100, 255})
 
     query_cstr := strings.clone_to_cstring(query_str, context.temp_allocator)
-    rl.DrawTextEx(font, query_cstr, {f32(box_x + 12) + 2 * char_width, f32(field_y)}, FONT_SIZE, spacing, TEXT_COLOR)
+    rl.DrawTextEx(font, query_cstr, {f32(box_x + 12) + 2 * char_width, f32(field_y)}, f32(cfg.font_size), spacing, cfg.text_color)
 
     // Cursor
     cx := f32(box_x + 12) + f32(qo.query_len + 2) * char_width
-    rl.DrawRectangle(i32(cx), i32(field_y), 2, i32(FONT_SIZE), CURSOR_COLOR)
+    rl.DrawRectangle(i32(cx), i32(field_y), 2, i32(cfg.font_size), cfg.cursor_color)
 
     // Results
     for i := 0; i < len(qo.results); i += 1 {
@@ -214,11 +213,11 @@ quick_open_render :: proc(qo: ^Quick_Open, font: rl.Font, char_width: f32, win_w
         dir := filepath.dir(fp, context.temp_allocator)
 
         base_cstr := strings.clone_to_cstring(base, context.temp_allocator)
-        rl.DrawTextEx(font, base_cstr, {f32(box_x + 16), f32(ry)}, FONT_SIZE, spacing, TEXT_COLOR)
+        rl.DrawTextEx(font, base_cstr, {f32(box_x + 16), f32(ry)}, f32(cfg.font_size), spacing, cfg.text_color)
 
         // Dim path after filename
-        base_w := rl.MeasureTextEx(font, base_cstr, FONT_SIZE, spacing)
+        base_w := rl.MeasureTextEx(font, base_cstr, f32(cfg.font_size), spacing)
         dir_cstr := strings.clone_to_cstring(dir, context.temp_allocator)
-        rl.DrawTextEx(font, dir_cstr, {f32(box_x + 20) + base_w.x, f32(ry)}, FONT_SIZE, spacing, rl.Color{90, 90, 90, 255})
+        rl.DrawTextEx(font, dir_cstr, {f32(box_x + 20) + base_w.x, f32(ry)}, f32(cfg.font_size), spacing, rl.Color{90, 90, 90, 255})
     }
 }

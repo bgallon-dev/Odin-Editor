@@ -627,7 +627,7 @@ is_builtin :: proc(word: string) -> bool { return is_builtin_odin(word) }
 // ---------------------------------------------------------------------------
 get_token_color :: proc(kind: Token_Kind) -> rl.Color {
     switch kind {
-    case .Normal:    return TEXT_COLOR
+    case .Normal:    return cfg.text_color
     case .Keyword:   return rl.Color{198, 120, 221, 255}  // purple
     case .Type:      return rl.Color{229, 192, 123, 255}  // gold
     case .Builtin:   return rl.Color{ 97, 175, 239, 255}  // blue
@@ -639,5 +639,5 @@ get_token_color :: proc(kind: Token_Kind) -> rl.Color {
     case .Directive: return rl.Color{224, 108, 117, 255}  // red
     case .Proc_Name: return rl.Color{ 97, 175, 239, 255}  // blue
     }
-    return TEXT_COLOR
+    return cfg.text_color
 }

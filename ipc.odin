@@ -452,13 +452,19 @@ ipc_send_file_saved :: proc(conn: ^IPC_Connection, file_path: string) -> bool {
 }
 
 ipc_send_draft_request :: proc(conn: ^IPC_Connection, file_path: string, cursor_offset: int) -> bool {
-    if conn.status != .Connected do return false
+    if conn.status != .Connected {
+        fmt.printfln("[DEBUG IPC-SEND] draft_request FAILED: not connected")
+        return false
+    }
     msg := fmt.tprintf(
         "{{\"type\":\"draft_request\",\"payload\":{{\"file_path\":\"%s\",\"cursor_offset\":%d}}}}\n",
         json_escape_string(file_path),
         cursor_offset,
     )
-    return ipc_send_raw(conn, msg)
+    fmt.printfln("[DEBUG IPC-SEND] draft_request: file='%s', cursor_offset=%d", file_path, cursor_offset)
+    ok := ipc_send_raw(conn, msg)
+    fmt.printfln("[DEBUG IPC-SEND] draft_request send result: %v", ok)
+    return ok
 }
 
 ipc_send_session_end :: proc(conn: ^IPC_Connection) -> bool {
@@ -536,6 +542,7 @@ ipc_poll :: proc(conn: ^IPC_Connection) -> (msg: IPC_Message, ok: bool) {
 
     // Parse the response type
     msg_type := json_extract_string(resp, "type")
+    fmt.printfln("[DEBUG IPC-POLL] received msg type='%s', resp_len=%d", msg_type, len(resp))
 
     if msg_type == "draft_response" {
         draft := Draft_Response{

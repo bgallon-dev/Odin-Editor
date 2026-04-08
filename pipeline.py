@@ -100,6 +100,39 @@ class PipelineResult:
 
 
 # ---------------------------------------------------------------------------
+# Draft sanitization
+# ---------------------------------------------------------------------------
+
+
+def sanitize_draft(text: str) -> str:
+    """Unescape and clean LLM draft output."""
+    # Phase 1: Fix double-escaped JSON artifacts
+    # The model sometimes outputs \\n instead of real newlines
+    if '\\n' in text and '\n' not in text:
+        # Entire output is a single escaped line — unescape it
+        text = text.replace('\\n', '\n')
+        text = text.replace('\\t', '\t')
+        text = text.replace('\\"', '"')
+        text = text.replace("\\'", "'")
+
+    # Phase 2: Strip markdown fences
+    lines = text.split('\n')
+    if lines and lines[0].strip().startswith('```'):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith('```'):
+        lines = lines[:-1]
+
+    # Phase 3: Trim leading/trailing blank lines
+    while lines and not lines[0].strip():
+        lines = lines[0:]  # keep one leading blank at most
+        break
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Context assembly
 # ---------------------------------------------------------------------------
 
@@ -188,7 +221,7 @@ def run_pipeline(
             drafter_ms=drafter_ms,
         )
 
-    draft_text = drafter_resp.text.strip()
+    draft_text = sanitize_draft(drafter_resp.text.strip())
     if not draft_text:
         return PipelineResult(
             success=False,

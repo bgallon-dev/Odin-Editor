@@ -6,17 +6,7 @@ import "core:fmt"
 import "core:strings"
 import "core:path/filepath"
 
-// ---------------------------------------------------------------------------
-// File browser config
-// ---------------------------------------------------------------------------
-SIDEBAR_W       :: 220
-SIDEBAR_BG      :: rl.Color{25, 25, 25, 255}
-SIDEBAR_HOVER   :: rl.Color{45, 45, 45, 255}
-SIDEBAR_TEXT     :: rl.Color{180, 180, 180, 255}
-SIDEBAR_DIR_CLR  :: rl.Color{140, 170, 220, 255}
-SIDEBAR_BORDER  :: rl.Color{50, 50, 50, 255}
-FB_LINE_H       :: 22
-FB_INDENT       :: 16
+// File browser config values are in cfg (see config.odin / editor.conf)
 
 // ---------------------------------------------------------------------------
 // File tree entry
@@ -182,20 +172,20 @@ file_browser_render :: proc(fb: ^File_Browser, font: rl.Font, win_h: int) -> str
     if !fb.visible do return ""
 
     spacing := f32(0)
-    rl.DrawRectangle(0, 0, SIDEBAR_W, i32(win_h), SIDEBAR_BG)
-    rl.DrawRectangle(SIDEBAR_W - 1, 0, 1, i32(win_h), SIDEBAR_BORDER)
+    rl.DrawRectangle(0, 0, i32(cfg.sidebar_w), i32(win_h), cfg.sidebar_bg)
+    rl.DrawRectangle(i32(cfg.sidebar_w) - 1, 0, 1, i32(win_h), cfg.sidebar_border)
 
     mx := int(rl.GetMouseX())
     my := int(rl.GetMouseY())
-    clicked := rl.IsMouseButtonPressed(.LEFT) && mx < SIDEBAR_W
+    clicked := rl.IsMouseButtonPressed(.LEFT) && mx < cfg.sidebar_w
 
     // Flatten visible entries for rendering
     clicked_path := ""
-    y_pos := 4 - fb.scroll_y * FB_LINE_H
+    y_pos := 4 - fb.scroll_y * cfg.fb_line_h
     file_browser_render_entry(fb, &fb.root, font, spacing, &y_pos, win_h, mx, my, clicked, &clicked_path)
 
     // Scroll
-    if mx < SIDEBAR_W {
+    if mx < cfg.sidebar_w {
         wheel := rl.GetMouseWheelMove()
         if wheel != 0 {
             fb.scroll_y -= int(wheel * 3)
@@ -209,13 +199,13 @@ file_browser_render :: proc(fb: ^File_Browser, font: rl.Font, win_h: int) -> str
 file_browser_render_entry :: proc(fb: ^File_Browser, entry: ^File_Entry, font: rl.Font,
                                     spacing: f32, y_pos: ^int, win_h: int,
                                     mx: int, my: int, clicked: bool, clicked_path: ^string) {
-    if y_pos^ >= -FB_LINE_H && y_pos^ < win_h {
-        x := 8 + entry.depth * FB_INDENT
+    if y_pos^ >= -cfg.fb_line_h && y_pos^ < win_h {
+        x := 8 + entry.depth * cfg.fb_indent
         fy := f32(y_pos^)
 
         // Hover highlight
-        if mx >= 0 && mx < SIDEBAR_W && my >= y_pos^ && my < y_pos^ + FB_LINE_H {
-            rl.DrawRectangle(0, i32(fy), SIDEBAR_W, i32(FB_LINE_H), SIDEBAR_HOVER)
+        if mx >= 0 && mx < cfg.sidebar_w && my >= y_pos^ && my < y_pos^ + cfg.fb_line_h {
+            rl.DrawRectangle(0, i32(fy), i32(cfg.sidebar_w), i32(cfg.fb_line_h), cfg.sidebar_hover)
 
             if clicked {
                 if entry.is_dir {
@@ -231,15 +221,15 @@ file_browser_render_entry :: proc(fb: ^File_Browser, entry: ^File_Entry, font: r
 
         // Icon prefix
         prefix := "  " if !entry.is_dir else ("v " if entry.expanded else "> ")
-        color := SIDEBAR_DIR_CLR if entry.is_dir else SIDEBAR_TEXT
+        color := cfg.sidebar_dir_clr if entry.is_dir else cfg.sidebar_text
 
         display_buf: [128]u8
         display := fmt.bprintf(display_buf[:], "%s%s", prefix, entry.name)
         display_cstr := strings.clone_to_cstring(display, context.temp_allocator)
-        rl.DrawTextEx(font, display_cstr, {f32(x), fy + 2}, f32(FONT_SIZE - 2), spacing, color)
+        rl.DrawTextEx(font, display_cstr, {f32(x), fy + 2}, f32(cfg.font_size - 2), spacing, color)
     }
 
-    y_pos^ += FB_LINE_H
+    y_pos^ += cfg.fb_line_h
 
     if entry.expanded {
         for i := 0; i < len(entry.children); i += 1 {

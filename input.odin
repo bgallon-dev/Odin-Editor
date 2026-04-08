@@ -1,6 +1,7 @@
 package editor
 
 import rl "vendor:raylib"
+import "core:fmt"
 import "core:strings"
 import "core:os"
 import "core:path/filepath"
@@ -11,7 +12,7 @@ import "core:path/filepath"
 editor_update :: proc(ed: ^Editor_State) {
     dt := f64(rl.GetFrameTime())
     ed.blink_timer += dt
-    if ed.blink_timer >= CURSOR_BLINK { ed.blink_timer -= CURSOR_BLINK; ed.blink_on = !ed.blink_on }
+    if ed.blink_timer >= cfg.cursor_blink { ed.blink_timer -= cfg.cursor_blink; ed.blink_on = !ed.blink_on }
     if ed.warn_timer > 0 { ed.warn_timer -= dt; if ed.warn_timer <= 0 { ed.warn_timer = 0; ed.close_blocked = false } }
 
     // Poll IPC for incoming messages
@@ -20,13 +21,18 @@ editor_update :: proc(ed: ^Editor_State) {
         if ipc_ok {
             #partial switch v in ipc_msg.data {
             case Draft_Response:
+                fmt.printfln("[DEBUG IPC] draft_response received — text_len=%d, confidence=%.2f, issues=%d",
+                    len(v.draft_text), v.confidence, len(v.issues))
                 if len(v.draft_text) > 0 {
+                    fmt.printfln("[DEBUG IPC] setting draft on side panel (first 80 chars): '%s'",
+                        v.draft_text[:min(80, len(v.draft_text))])
                     side_panel_set_draft(&ed.side_panel, v.draft_text, v.confidence)
                     // Move issues to the side panel
                     if len(v.issues) > 0 {
                         side_panel_set_issues(&ed.side_panel, v.issues[:])
                     }
                 } else {
+                    fmt.printfln("[DEBUG IPC] empty draft_text — setting drafting=false")
                     ed.side_panel.drafting = false
                 }
                 // Clean up the response's owned strings
@@ -78,16 +84,23 @@ editor_update :: proc(ed: ^Editor_State) {
 
     // Ctrl+D = Request draft from memory system
     if ctrl_held && rl.IsKeyPressed(.D) {
+        fmt.printfln("[DEBUG Ctrl+D] pressed — ipc connected=%v, save_path='%s'",
+            ipc_is_connected(&ed.ipc), buf.save_path)
         if !ipc_is_connected(&ed.ipc) {
+            fmt.printfln("[DEBUG Ctrl+D] BLOCKED: IPC not connected")
             ed.warn_timer = 2.0
         } else if len(buf.save_path) == 0 {
+            fmt.printfln("[DEBUG Ctrl+D] BLOCKED: no save_path on buffer")
             ed.warn_timer = 2.0
         } else {
+            fmt.printfln("[DEBUG Ctrl+D] sending draft request for '%s' at cursor offset %d",
+                buf.save_path, buf.cursor.offset)
             memory_on_draft_request(&ed.ipc, buf)
             ed.side_panel.drafting = true
             ed.side_panel.draft_ready = false
             ed.side_panel.visible = true
             ed.side_panel.active_tab = .Draft
+            fmt.printfln("[DEBUG Ctrl+D] side_panel: drafting=true, visible=true, tab=Draft")
         }
         return
     }
@@ -168,7 +181,15 @@ editor_update :: proc(ed: ^Editor_State) {
     if ctrl_held && rl.IsKeyPressed(.Y) { cp := undo_stack_redo(&buf.undo_stack, &buf.pt); if cp >= 0 { buf.cursor.offset = cp; cursor_recompute_line_col(&buf.pt, &buf.cursor); buf.cursor.preferred_col = buf.cursor.col; cursor_clear_selection(&buf.cursor); reset_blink(ed); buf.dirty = true }; ensure_cursor_visible_buf(ed, buf); return }
     if ctrl_held && rl.IsKeyPressed(.S) { save_file_buf(buf, &ed.ipc); ed.close_blocked = false; ed.warn_timer = 0; return }
     if ctrl_held && rl.IsKeyPressed(.A) { buf.cursor.sel_anchor = 0; buf.cursor.offset = buf.pt.doc_length; cursor_recompute_line_col(&buf.pt, &buf.cursor); return }
-    if ctrl_held && rl.IsKeyPressed(.C) { if cursor_has_selection(&buf.cursor) do copy_selection_buf(buf); return }
+    if ctrl_held && rl.IsKeyPressed(.C) {
+        // If mouse is over side panel, let the panel handle copy
+        if ed.side_panel.visible && int(rl.GetMouseX()) >= int(rl.GetScreenWidth()) - ed.side_panel.width {
+            // Don't consume — side panel will handle during render
+        } else {
+            if cursor_has_selection(&buf.cursor) do copy_selection_buf(buf)
+        }
+        return
+    }
     if ctrl_held && rl.IsKeyPressed(.X) {
         if cursor_has_selection(&buf.cursor) { copy_selection_buf(buf); ts := current_time_ms(); ss := cursor_sel_start(&buf.cursor); se := cursor_sel_end(&buf.cursor); op := execute_delete(&buf.pt, ss, se, buf.cursor.offset, ts); undo_stack_push(&buf.undo_stack, &buf.pt, op); buf.cursor.offset = ss; cursor_clear_selection(&buf.cursor); cursor_recompute_line_col(&buf.pt, &buf.cursor); buf.cursor.preferred_col = buf.cursor.col; reset_blink(ed); buf.dirty = true; ensure_cursor_visible_buf(ed, buf) }; return
     }
@@ -241,25 +262,25 @@ editor_update :: proc(ed: ^Editor_State) {
     win_h := int(rl.GetScreenHeight())
     left_m := get_left_margin(ed)
     text_top := get_text_top()
-    text_bottom := win_h - LINE_HEIGHT
-    if buf.find.active { text_bottom -= SEARCH_BAR_H; if buf.find.show_replace do text_bottom -= SEARCH_BAR_H }
+    text_bottom := win_h - cfg.line_height
+    if buf.find.active { text_bottom -= cfg.search_bar_h; if buf.find.show_replace do text_bottom -= cfg.search_bar_h }
 
     mx := int(rl.GetMouseX())
     my := int(rl.GetMouseY())
 
     // Tab bar clicks
-    if (rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.MIDDLE)) && my < TAB_BAR_H {
+    if (rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.MIDDLE)) && my < cfg.tab_bar_h {
         sidebar_off := 0
-        if ed.file_browser.visible do sidebar_off = SIDEBAR_W
-        tab_idx := (mx - sidebar_off) / TAB_W
+        if ed.file_browser.visible do sidebar_off = cfg.sidebar_w
+        tab_idx := (mx - sidebar_off) / cfg.tab_w
         if tab_idx >= 0 && tab_idx < len(ed.tab_bar.tabs) {
             if rl.IsMouseButtonPressed(.MIDDLE) {
                 // Middle-click closes the tab
                 tab_close(&ed.tab_bar, tab_idx)
             } else {
                 // Left-click: close button or switch tab
-                local_x := (mx - sidebar_off) - tab_idx * TAB_W
-                if local_x >= TAB_W - 20 {
+                local_x := (mx - sidebar_off) - tab_idx * cfg.tab_w
+                if local_x >= cfg.tab_w - 20 {
                     tab_close(&ed.tab_bar, tab_idx)
                 } else {
                     ed.tab_bar.active = tab_idx
@@ -270,12 +291,12 @@ editor_update :: proc(ed: ^Editor_State) {
     }
 
     // Text area clicks
-    if rl.IsMouseButtonPressed(.LEFT) && my >= text_top && my < text_bottom && mx >= left_m - GUTTER_W {
+    if rl.IsMouseButtonPressed(.LEFT) && my >= text_top && my < text_bottom && mx >= left_m - cfg.gutter_w {
         now := rl.GetTime()
 
         if mx < left_m {
             // Gutter click: select line
-            screen_line := (my - text_top) / LINE_HEIGHT
+            screen_line := (my - text_top) / cfg.line_height
             clicked_line := buf.scroll_y + screen_line
             clicked_line = clamp(clicked_line, 0, max(0, buf.pt.total_lines - 1))
             ls := find_line_start(&buf.pt, clicked_line)
@@ -286,10 +307,10 @@ editor_update :: proc(ed: ^Editor_State) {
         } else {
             // Text area click
             dx := mx - ed.last_click_x; dy := my - ed.last_click_y
-            if now - ed.last_click_time < DOUBLE_CLICK_T && dx*dx+dy*dy < 100 { ed.click_count += 1 } else { ed.click_count = 1 }
+            if now - ed.last_click_time < cfg.double_click_t && dx*dx+dy*dy < 100 { ed.click_count += 1 } else { ed.click_count = 1 }
             ed.last_click_time = now; ed.last_click_x = mx; ed.last_click_y = my
 
-            screen_line := (my - text_top) / LINE_HEIGHT
+            screen_line := (my - text_top) / cfg.line_height
             clicked_line := buf.scroll_y + screen_line
             clicked_col := int(f32(mx - left_m) / ed.char_width + 0.5)
             clicked_line = clamp(clicked_line, 0, max(0, buf.pt.total_lines - 1))
@@ -315,7 +336,7 @@ editor_update :: proc(ed: ^Editor_State) {
 
     // Drag
     if ed.is_dragging && rl.IsMouseButtonDown(.LEFT) && mx >= left_m && my >= text_top && my < text_bottom {
-        sl := (my - text_top) / LINE_HEIGHT; dl := buf.scroll_y + sl; dc := int(f32(mx - left_m) / ed.char_width + 0.5)
+        sl := (my - text_top) / cfg.line_height; dl := buf.scroll_y + sl; dc := int(f32(mx - left_m) / ed.char_width + 0.5)
         dl = clamp(dl, 0, max(0, buf.pt.total_lines - 1)); if dc < 0 do dc = 0
         cursor_move_to_line_col(&buf.pt, &buf.cursor, dl, dc); buf.cursor.preferred_col = buf.cursor.col
         reset_blink(ed); ensure_cursor_visible_buf(ed, buf)

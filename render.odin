@@ -12,7 +12,7 @@ editor_render :: proc(ed: ^Editor_State) {
     free_all(context.temp_allocator)
 
     rl.BeginDrawing()
-    rl.ClearBackground(BG_COLOR)
+    rl.ClearBackground(cfg.bg_color)
 
     win_w := int(rl.GetScreenWidth())
     win_h := int(rl.GetScreenHeight())
@@ -21,52 +21,52 @@ editor_render :: proc(ed: ^Editor_State) {
     left_m := get_left_margin(ed)
     text_top := get_text_top()
     spacing := f32(0)
-    gutter_x := left_m - GUTTER_W
-    if ed.file_browser.visible do gutter_x = SIDEBAR_W
+    gutter_x := left_m - cfg.gutter_w
+    if ed.file_browser.visible do gutter_x = cfg.sidebar_w
 
     // === Tab bar ===
     mx := int(rl.GetMouseX())
     my := int(rl.GetMouseY())
     sidebar_off := 0
-    if ed.file_browser.visible do sidebar_off = SIDEBAR_W
-    rl.DrawRectangle(i32(sidebar_off), 0, i32(win_w - sidebar_off), i32(TAB_BAR_H), TAB_BG)
+    if ed.file_browser.visible do sidebar_off = cfg.sidebar_w
+    rl.DrawRectangle(i32(sidebar_off), 0, i32(win_w - sidebar_off), i32(cfg.tab_bar_h), cfg.tab_bg)
     for i := 0; i < len(ed.tab_bar.tabs); i += 1 {
-        tx := sidebar_off + i * TAB_W
+        tx := sidebar_off + i * cfg.tab_w
         is_active := i == ed.tab_bar.active
-        bg := TAB_ACTIVE_BG if is_active else TAB_BG
-        tc := TAB_ACTIVE_TEXT if is_active else TAB_TEXT
-        rl.DrawRectangle(i32(tx), 0, i32(TAB_W), i32(TAB_BAR_H), bg)
-        rl.DrawRectangle(i32(tx + TAB_W - 1), 0, 1, i32(TAB_BAR_H), TAB_BORDER)
-        if is_active do rl.DrawRectangle(i32(tx), i32(TAB_BAR_H - 2), i32(TAB_W), 2, CURSOR_COLOR)
+        bg := cfg.tab_active_bg if is_active else cfg.tab_bg
+        tc := cfg.tab_active_text if is_active else cfg.tab_text
+        rl.DrawRectangle(i32(tx), 0, i32(cfg.tab_w), i32(cfg.tab_bar_h), bg)
+        rl.DrawRectangle(i32(tx + cfg.tab_w - 1), 0, 1, i32(cfg.tab_bar_h), cfg.tab_border)
+        if is_active do rl.DrawRectangle(i32(tx), i32(cfg.tab_bar_h - 2), i32(cfg.tab_w), 2, cfg.cursor_color)
 
         tb := &ed.tab_bar.tabs[i]
         name_buf: [64]u8
         dirty_m := "*" if tb.dirty else ""
         name_str := fmt.bprintf(name_buf[:], "%s%s", dirty_m, tb.filepath)
         // Truncate if too long — leave room for close button
-        max_chars := (TAB_W - 28) / int(ed.char_width)
+        max_chars := (cfg.tab_w - 28) / int(ed.char_width)
         if len(name_str) > max_chars && max_chars > 3 {
             name_str = name_str[:max_chars]
         }
         nc := strings.clone_to_cstring(name_str, context.temp_allocator)
-        rl.DrawTextEx(ed.font, nc, {f32(tx + 6), 5}, f32(FONT_SIZE - 2), spacing, tc)
+        rl.DrawTextEx(ed.font, nc, {f32(tx + 6), 5}, f32(cfg.font_size - 2), spacing, tc)
 
         // Close button
-        close_x := i32(tx + TAB_W - 20)
+        close_x := i32(tx + cfg.tab_w - 20)
         close_y := i32(4)
         close_w :: 16
         close_h :: 20
         close_hover := mx >= int(close_x) && mx < int(close_x + close_w) &&
                        my >= int(close_y) && my < int(close_y + close_h)
         close_color := rl.Color{200, 80, 80, 255} if close_hover else tc
-        rl.DrawTextEx(ed.font, "x", {f32(close_x + 3), f32(close_y + 1)}, f32(FONT_SIZE - 2), spacing, close_color)
+        rl.DrawTextEx(ed.font, "x", {f32(close_x + 3), f32(close_y + 1)}, f32(cfg.font_size - 2), spacing, close_color)
     }
 
     // === Current line highlight ===
     csl := buf.cursor.line - buf.scroll_y
     if csl >= 0 && csl < visible {
-        cy := i32(text_top + csl * LINE_HEIGHT)
-        rl.DrawRectangle(i32(left_m - GUTTER_W), cy, i32(win_w), i32(LINE_HEIGHT), CURLINE_COLOR)
+        cy := i32(text_top + csl * cfg.line_height)
+        rl.DrawRectangle(i32(left_m - cfg.gutter_w), cy, i32(win_w), i32(cfg.line_height), cfg.curline_color)
     }
 
     // === Text rendering ===
@@ -108,7 +108,7 @@ editor_render :: proc(ed: ^Editor_State) {
         lb := raw[lso:leo]
 
         if sl >= 0 {
-            y := f32(text_top + sl * LINE_HEIGHT)
+            y := f32(text_top + sl * cfg.line_height)
 
             // Search highlights
             if search_len > 0 {
@@ -117,8 +117,8 @@ editor_render :: proc(ed: ^Editor_State) {
                     if me > lso && mo < leo {
                         hs := max(mo, lso) - lso; he := min(me, leo) - lso
                         sx := f32(left_m) + f32(hs) * ed.char_width; w := f32(he - hs) * ed.char_width
-                        clr := SEARCH_CUR_MATCH if (buf.find.current_match >= 0 && buf.find.current_match < len(buf.find.matches) && buf.find.matches[buf.find.current_match] == mo) else SEARCH_MATCH_CLR
-                        rl.DrawRectangle(i32(sx), i32(y), i32(w), i32(LINE_HEIGHT), clr)
+                        clr := cfg.search_cur_match if (buf.find.current_match >= 0 && buf.find.current_match < len(buf.find.matches) && buf.find.matches[buf.find.current_match] == mo) else cfg.search_match_clr
+                        rl.DrawRectangle(i32(sx), i32(y), i32(w), i32(cfg.line_height), clr)
                     }
                 }
             }
@@ -127,7 +127,7 @@ editor_render :: proc(ed: ^Editor_State) {
             if bracket_match_off >= lso && bracket_match_off < leo {
                 bc := bracket_match_off - lso
                 bx := f32(left_m) + f32(bc) * ed.char_width
-                rl.DrawRectangle(i32(bx), i32(y), i32(ed.char_width), i32(LINE_HEIGHT), BRACKET_HL)
+                rl.DrawRectangle(i32(bx), i32(y), i32(ed.char_width), i32(cfg.line_height), cfg.bracket_hl)
             }
             // Also highlight the bracket at cursor
             if buf.cursor.offset >= lso && buf.cursor.offset < leo && bracket_match_off >= 0 {
@@ -135,7 +135,7 @@ editor_render :: proc(ed: ^Editor_State) {
                 if ch_at == '(' || ch_at == ')' || ch_at == '{' || ch_at == '}' || ch_at == '[' || ch_at == ']' {
                     bc := buf.cursor.offset - lso
                     bx := f32(left_m) + f32(bc) * ed.char_width
-                    rl.DrawRectangle(i32(bx), i32(y), i32(ed.char_width), i32(LINE_HEIGHT), BRACKET_HL)
+                    rl.DrawRectangle(i32(bx), i32(y), i32(ed.char_width), i32(cfg.line_height), cfg.bracket_hl)
                 }
             }
 
@@ -151,7 +151,7 @@ editor_render :: proc(ed: ^Editor_State) {
                 for j := 0; j < len(tbs); j += 1 {
                     x := f32(left_m) + f32(col) * ed.char_width
                     cb: [2]u8; cb[0] = tbs[j]; cb[1] = 0
-                    rl.DrawTextEx(ed.font, cast(cstring)&cb[0], {x, y + 2}, FONT_SIZE, spacing, color)
+                    rl.DrawTextEx(ed.font, cast(cstring)&cb[0], {x, y + 2}, f32(cfg.font_size), spacing, color)
                     col += 1
                 }
             }
@@ -165,47 +165,47 @@ editor_render :: proc(ed: ^Editor_State) {
     // Line numbers
     for i := 0; i < visible; i += 1 {
         ln := buf.scroll_y + i; if ln >= buf.pt.total_lines do break
-        y := f32(text_top + i * LINE_HEIGHT)
+        y := f32(text_top + i * cfg.line_height)
         nb: [16]u8; ns := fmt.bprintf(nb[:], "%3d", ln + 1)
         nc := strings.clone_to_cstring(ns, context.temp_allocator)
-        rl.DrawTextEx(ed.font, nc, {f32(gutter_x + 2), y + 2}, FONT_SIZE, spacing, LINENUM_COLOR)
+        rl.DrawTextEx(ed.font, nc, {f32(gutter_x + 2), y + 2}, f32(cfg.font_size), spacing, cfg.linenum_color)
     }
 
     // Cursor
     if ed.blink_on && csl >= 0 && csl < visible {
         cx := f32(left_m) + f32(buf.cursor.col) * ed.char_width
-        cy := f32(text_top + csl * LINE_HEIGHT)
-        rl.DrawRectangle(i32(cx), i32(cy), 2, i32(LINE_HEIGHT), CURSOR_COLOR)
+        cy := f32(text_top + csl * cfg.line_height)
+        rl.DrawRectangle(i32(cx), i32(cy), 2, i32(cfg.line_height), cfg.cursor_color)
     }
 
     // === Minimap ===
     if ed.show_minimap {
-        mm_x := win_w - MINIMAP_W
-        if ed.side_panel.visible do mm_x -= SIDE_PANEL_W
-        rl.DrawRectangle(i32(mm_x), i32(text_top), i32(MINIMAP_W), i32(win_h - text_top), MINIMAP_BG)
+        mm_x := win_w - cfg.minimap_w
+        if ed.side_panel.visible do mm_x -= ed.side_panel.width
+        rl.DrawRectangle(i32(mm_x), i32(text_top), i32(cfg.minimap_w), i32(win_h - text_top), cfg.minimap_bg)
 
         // Viewport indicator
         mm_total := buf.pt.total_lines
         if mm_total > 0 {
-            mm_h := win_h - text_top - LINE_HEIGHT
+            mm_h := win_h - text_top - cfg.line_height
             view_start := int(f32(buf.scroll_y) / f32(mm_total) * f32(mm_h))
             view_h := int(f32(visible) / f32(mm_total) * f32(mm_h))
             if view_h < 8 do view_h = 8
-            rl.DrawRectangle(i32(mm_x), i32(text_top + view_start), i32(MINIMAP_W), i32(view_h), MINIMAP_VIEW)
+            rl.DrawRectangle(i32(mm_x), i32(text_top + view_start), i32(cfg.minimap_w), i32(view_h), cfg.minimap_view)
         }
 
         // Render minimap text (simplified — one pixel per char)
         mm_line := 0; mm_lso := 0
         for mm_lso <= len(raw) {
             mm_leo := mm_lso; for mm_leo < len(raw) && raw[mm_leo] != '\n' { mm_leo += 1 }
-            mm_y := text_top + mm_line * MINIMAP_LINE_H
-            if mm_y >= win_h - LINE_HEIGHT do break
+            mm_y := text_top + mm_line * cfg.minimap_line_h
+            if mm_y >= win_h - cfg.line_height do break
 
             line_len := mm_leo - mm_lso
             // Draw a tiny colored line for non-empty lines
             if line_len > 0 {
-                draw_w := min(line_len, MINIMAP_W / int(MINIMAP_CHAR_W))
-                rl.DrawRectangle(i32(mm_x + 2), i32(mm_y), i32(f32(draw_w) * MINIMAP_CHAR_W), i32(MINIMAP_LINE_H - 1), MINIMAP_TEXT)
+                draw_w := min(line_len, cfg.minimap_w / int(cfg.minimap_char_w))
+                rl.DrawRectangle(i32(mm_x + 2), i32(mm_y), i32(f32(draw_w) * cfg.minimap_char_w), i32(cfg.minimap_line_h - 1), cfg.minimap_text)
             }
 
             mm_line += 1; mm_lso = mm_leo + 1; if mm_leo >= len(raw) do break
@@ -214,7 +214,7 @@ editor_render :: proc(ed: ^Editor_State) {
         // Minimap click to scroll
         if rl.IsMouseButtonPressed(.LEFT) && int(rl.GetMouseX()) >= mm_x {
             mm_my := int(rl.GetMouseY()) - text_top
-            mm_h := win_h - text_top - LINE_HEIGHT
+            mm_h := win_h - text_top - cfg.line_height
             if mm_h > 0 && buf.pt.total_lines > 0 {
                 target := int(f32(mm_my) / f32(mm_h) * f32(buf.pt.total_lines))
                 buf.scroll_y = clamp(target - visible/2, 0, get_max_scroll(ed))
@@ -223,10 +223,10 @@ editor_render :: proc(ed: ^Editor_State) {
     }
 
     // === Status bar ===
-    status_y := win_h - LINE_HEIGHT
-    if buf.find.active { status_y -= SEARCH_BAR_H; if buf.find.show_replace do status_y -= SEARCH_BAR_H }
-    sbg := STATUS_BG; if ed.warn_timer > 0 do sbg = STATUS_WARN_BG
-    rl.DrawRectangle(0, i32(status_y), i32(win_w), i32(LINE_HEIGHT), sbg)
+    status_y := win_h - cfg.line_height
+    if buf.find.active { status_y -= cfg.search_bar_h; if buf.find.show_replace do status_y -= cfg.search_bar_h }
+    sbg := cfg.status_bg; if ed.warn_timer > 0 do sbg = cfg.status_warn_bg
+    rl.DrawRectangle(0, i32(status_y), i32(win_w), i32(cfg.line_height), sbg)
 
     stb: [512]u8; dm := "*" if buf.dirty else ""; fd := buf.filepath if len(buf.filepath) > 0 else "[new]"
     ss: string
@@ -242,30 +242,30 @@ editor_render :: proc(ed: ^Editor_State) {
         ss = fmt.bprintf(stb[:], " %s%s  |  Ln %d, Col %d  |  %d lines%s%s  |  Ctrl+B browser  Ctrl+P open  Ctrl+J panel", dm, fd, buf.cursor.line+1, buf.cursor.col+1, buf.pt.total_lines, mi, sym_info)
     }
     sc := strings.clone_to_cstring(ss, context.temp_allocator)
-    rl.DrawTextEx(ed.font, sc, {4, f32(status_y) + 2}, FONT_SIZE, spacing, STATUS_FG)
+    rl.DrawTextEx(ed.font, sc, {4, f32(status_y) + 2}, f32(cfg.font_size), spacing, cfg.status_fg)
 
     // === Search bar ===
     if buf.find.active {
-        sy := status_y + LINE_HEIGHT
-        rl.DrawRectangle(0, i32(sy), i32(win_w), i32(SEARCH_BAR_H), SEARCH_BG)
-        rl.DrawRectangle(0, i32(sy), i32(win_w), 1, SEARCH_BORDER)
+        sy := status_y + cfg.line_height
+        rl.DrawRectangle(0, i32(sy), i32(win_w), i32(cfg.search_bar_h), cfg.search_bg)
+        rl.DrawRectangle(0, i32(sy), i32(win_w), 1, cfg.search_border)
         lbl := "Find: "; lc := strings.clone_to_cstring(lbl, context.temp_allocator)
-        rl.DrawTextEx(ed.font, lc, {8, f32(sy)+4}, FONT_SIZE, spacing, STATUS_FG)
+        rl.DrawTextEx(ed.font, lc, {8, f32(sy)+4}, f32(cfg.font_size), spacing, cfg.status_fg)
         fx := f32(8) + 6*ed.char_width
         st := string(buf.find.search_buf[:buf.find.search_len]); stc := strings.clone_to_cstring(st, context.temp_allocator)
-        fc := TEXT_COLOR if !buf.find.focus_replace else rl.Color{150,150,150,255}
-        rl.DrawTextEx(ed.font, stc, {fx, f32(sy)+4}, FONT_SIZE, spacing, fc)
-        if !buf.find.focus_replace && ed.blink_on { scx := fx + f32(buf.find.search_len)*ed.char_width; rl.DrawRectangle(i32(scx), i32(sy+3), 2, i32(FONT_SIZE), CURSOR_COLOR) }
+        fc := cfg.text_color if !buf.find.focus_replace else rl.Color{150,150,150,255}
+        rl.DrawTextEx(ed.font, stc, {fx, f32(sy)+4}, f32(cfg.font_size), spacing, fc)
+        if !buf.find.focus_replace && ed.blink_on { scx := fx + f32(buf.find.search_len)*ed.char_width; rl.DrawRectangle(i32(scx), i32(sy+3), 2, i32(cfg.font_size), cfg.cursor_color) }
 
         if buf.find.show_replace {
-            ry := sy + SEARCH_BAR_H
-            rl.DrawRectangle(0, i32(ry), i32(win_w), i32(SEARCH_BAR_H), SEARCH_BG)
+            ry := sy + cfg.search_bar_h
+            rl.DrawRectangle(0, i32(ry), i32(win_w), i32(cfg.search_bar_h), cfg.search_bg)
             rlbl := "Repl: "; rlc := strings.clone_to_cstring(rlbl, context.temp_allocator)
-            rl.DrawTextEx(ed.font, rlc, {8, f32(ry)+4}, FONT_SIZE, spacing, STATUS_FG)
+            rl.DrawTextEx(ed.font, rlc, {8, f32(ry)+4}, f32(cfg.font_size), spacing, cfg.status_fg)
             rt := string(buf.find.replace_buf[:buf.find.replace_len]); rtc := strings.clone_to_cstring(rt, context.temp_allocator)
-            rfc := TEXT_COLOR if buf.find.focus_replace else rl.Color{150,150,150,255}
-            rl.DrawTextEx(ed.font, rtc, {fx, f32(ry)+4}, FONT_SIZE, spacing, rfc)
-            if buf.find.focus_replace && ed.blink_on { rcx := fx + f32(buf.find.replace_len)*ed.char_width; rl.DrawRectangle(i32(rcx), i32(ry+3), 2, i32(FONT_SIZE), CURSOR_COLOR) }
+            rfc := cfg.text_color if buf.find.focus_replace else rl.Color{150,150,150,255}
+            rl.DrawTextEx(ed.font, rtc, {fx, f32(ry)+4}, f32(cfg.font_size), spacing, rfc)
+            if buf.find.focus_replace && ed.blink_on { rcx := fx + f32(buf.find.replace_len)*ed.char_width; rl.DrawRectangle(i32(rcx), i32(ry+3), 2, i32(cfg.font_size), cfg.cursor_color) }
         }
     }
 
@@ -288,16 +288,18 @@ editor_render :: proc(ed: ^Editor_State) {
             // Insert draft text at cursor
             if ed.side_panel.draft_ready && len(ed.side_panel.draft_text) > 0 {
                 ts := current_time_ms()
+                clean_draft, was_cleaned := sanitize_draft_text(ed.side_panel.draft_text)
+                defer if was_cleaned do delete(clean_draft)
                 if cursor_has_selection(&buf.cursor) {
                     ss := cursor_sel_start(&buf.cursor); se := cursor_sel_end(&buf.cursor)
-                    op := execute_replace(&buf.pt, ss, se, ed.side_panel.draft_text, buf.cursor.offset, ts)
+                    op := execute_replace(&buf.pt, ss, se, clean_draft, buf.cursor.offset, ts)
                     undo_stack_push(&buf.undo_stack, &buf.pt, op)
-                    buf.cursor.offset = ss + len(ed.side_panel.draft_text)
+                    buf.cursor.offset = ss + len(clean_draft)
                     cursor_clear_selection(&buf.cursor)
                 } else {
-                    op := execute_insert(&buf.pt, buf.cursor.offset, ed.side_panel.draft_text, buf.cursor.offset, ts)
+                    op := execute_insert(&buf.pt, buf.cursor.offset, clean_draft, buf.cursor.offset, ts)
                     undo_stack_push(&buf.undo_stack, &buf.pt, op)
-                    buf.cursor.offset += len(ed.side_panel.draft_text)
+                    buf.cursor.offset += len(clean_draft)
                 }
                 cursor_recompute_line_col(&buf.pt, &buf.cursor)
                 buf.cursor.preferred_col = buf.cursor.col
@@ -355,7 +357,7 @@ find_matching_bracket :: proc(pt: ^Piece_Table, offset: int) -> int {
 draw_line_selection_at :: proc(ed: ^Editor_State, ls: int, le: int, ss: int, se: int, sl: int, left_m: int) {
     hs := max(ls, ss); he := min(le, se)
     if hs >= he && !(ss <= le && se > le) do return
-    y := f32(get_text_top() + sl * LINE_HEIGHT)
-    if hs < he { cs := hs-ls; ce := he-ls; sx := f32(left_m) + f32(cs)*ed.char_width; w := f32(ce-cs)*ed.char_width; rl.DrawRectangle(i32(sx), i32(y), i32(w), i32(LINE_HEIGHT), SEL_COLOR) }
-    if ss <= le && se > le { col := le-ls; sx := f32(left_m) + f32(col)*ed.char_width; rl.DrawRectangle(i32(sx), i32(y), i32(ed.char_width), i32(LINE_HEIGHT), SEL_COLOR) }
+    y := f32(get_text_top() + sl * cfg.line_height)
+    if hs < he { cs := hs-ls; ce := he-ls; sx := f32(left_m) + f32(cs)*ed.char_width; w := f32(ce-cs)*ed.char_width; rl.DrawRectangle(i32(sx), i32(y), i32(w), i32(cfg.line_height), cfg.sel_color) }
+    if ss <= le && se > le { col := le-ls; sx := f32(left_m) + f32(col)*ed.char_width; rl.DrawRectangle(i32(sx), i32(y), i32(ed.char_width), i32(cfg.line_height), cfg.sel_color) }
 }

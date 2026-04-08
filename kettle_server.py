@@ -505,6 +505,38 @@ def get_recent_findings(db: sqlite3.Connection, file_path: str, limit: int = 10)
     return findings
 
 
+def get_all_symbol_names(db: sqlite3.Connection) -> set[str]:
+    """Return the set of all known symbol names across the project."""
+    rows = db.execute("SELECT DISTINCT name FROM symbols").fetchall()
+    return {r[0] for r in rows}
+
+
+def check_unknown_identifiers(draft_text: str, known_symbols: set[str]) -> list[str]:
+    """Find identifiers in the draft that don't appear in known symbols."""
+    import re
+    # Extract word-like tokens from the draft
+    tokens = set(re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', draft_text))
+    # Filter out common Odin language keywords and builtins
+    odin_builtins = {
+        'proc', 'struct', 'enum', 'union', 'for', 'if', 'else', 'when',
+        'return', 'do', 'break', 'continue', 'switch', 'case', 'defer',
+        'using', 'import', 'package', 'foreign', 'where', 'distinct',
+        'dynamic', 'map', 'bit_set', 'matrix', 'or_else', 'or_return',
+        'true', 'false', 'nil',
+        'int', 'uint', 'i8', 'i16', 'i32', 'i64', 'i128',
+        'u8', 'u16', 'u32', 'u64', 'u128',
+        'f16', 'f32', 'f64', 'bool', 'string', 'cstring', 'rawptr',
+        'byte', 'rune', 'uintptr', 'typeid', 'any',
+        'len', 'cap', 'append', 'delete', 'make', 'new', 'free',
+        'size_of', 'align_of', 'offset_of', 'type_of', 'type_info_of',
+        'transmute', 'cast', 'auto_cast',
+        'i', 'j', 'k', 'v', 'ok', 'err', 'it', 'idx',
+        'context', 'allocator', 'temp_allocator',
+    }
+    unknown = tokens - known_symbols - odin_builtins
+    return sorted(unknown)
+
+
 # ---------------------------------------------------------------------------
 # IPC server
 # ---------------------------------------------------------------------------
@@ -528,6 +560,9 @@ class KettleServer:
         self.session_id: Optional[int] = None
         self.parent_pid = parent_pid
         self.running = False
+        # Layer 4: track pre-acceptance symbol state for regression detection
+        self._pre_accept_file: Optional[str] = None
+        self._pre_accept_symbols: Optional[set[str]] = None
 
     def initialize(self):
         """Initialize databases and run seeding if needed."""
@@ -739,6 +774,28 @@ class KettleServer:
         cur = self.project_db.execute("SELECT COUNT(*) FROM symbols")
         total_symbols = cur.fetchone()[0]
 
+        # Layer 4: Post-acceptance regression detection
+        if (self._pre_accept_file and self._pre_accept_symbols is not None
+                and file_path == self._pre_accept_file):
+            post_symbols = {
+                s.name for s in get_file_symbols(self.project_db, file_path)
+            }
+            lost = self._pre_accept_symbols - post_symbols
+            if lost and self.session_id:
+                log(f"draft_regression: {len(lost)} symbols lost after "
+                    f"draft acceptance: {sorted(lost)[:10]}")
+                record_event(
+                    self.project_db, self.session_id, "draft_regression",
+                    file_path=file_path,
+                    payload={
+                        "symbols_lost": sorted(lost),
+                        "pre_count": len(self._pre_accept_symbols),
+                        "post_count": len(post_symbols),
+                    },
+                )
+            self._pre_accept_file = None
+            self._pre_accept_symbols = None
+
         log(f"file_saved: {file_path}, {symbols_updated} symbols synced, total={total_symbols}")
         return {
             "type": "file_saved_ack",
@@ -821,11 +878,31 @@ class KettleServer:
                 },
             )
 
+        # Structural validation: penalize confidence if too many unknown identifiers
+        if result.success and result.draft_text:
+            all_symbols = get_all_symbol_names(self.project_db)
+            unknown = check_unknown_identifiers(result.draft_text, all_symbols)
+            import re
+            all_tokens = set(re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', result.draft_text))
+            if all_tokens:
+                unknown_ratio = len(unknown) / len(all_tokens)
+                if unknown_ratio > 0.3:
+                    log(f"structural check: {len(unknown)}/{len(all_tokens)} "
+                        f"identifiers unknown ({unknown_ratio:.0%}): {unknown[:10]}")
+                    result.confidence = max(0.0, result.confidence - 0.4)
+
         log(
             f"pipeline complete: success={result.success} "
             f"drafter={result.drafter_ms}ms validator={result.validator_ms}ms "
             f"findings={len(result.findings)}"
         )
+
+        # Track the file for post-acceptance regression detection
+        if result.success:
+            self._pre_accept_file = file_path
+            self._pre_accept_symbols = {
+                s.name for s in get_file_symbols(self.project_db, file_path)
+            }
 
         # Build the response with indexed findings for Odin parsing
         resp_payload = {

@@ -4,23 +4,7 @@ import rl "vendor:raylib"
 import "core:fmt"
 import "core:strings"
 
-// ---------------------------------------------------------------------------
-// Side panel config
-// ---------------------------------------------------------------------------
-SIDE_PANEL_W       :: 300
-SIDE_PANEL_BG      :: rl.Color{28,  28,  28,  255}
-SIDE_PANEL_BORDER  :: rl.Color{50,  50,  50,  255}
-SIDE_PANEL_HEADER  :: rl.Color{35,  35,  35,  255}
-SIDE_PANEL_TEXT    :: rl.Color{180, 180, 180, 255}
-SIDE_PANEL_TAB_H   :: 28
-SIDE_PANEL_BTN_H   :: 26
-SIDE_PANEL_BTN_BG  :: rl.Color{55,  55,  55,  255}
-SIDE_PANEL_BTN_HOV :: rl.Color{70,  70,  70,  255}
-SIDE_PANEL_LINE_H  :: 22
-
-SEVERITY_INFO_CLR    :: rl.Color{97,  175, 239, 255}  // blue
-SEVERITY_WARNING_CLR :: rl.Color{229, 192, 123, 255}  // yellow
-SEVERITY_ERROR_CLR   :: rl.Color{224, 108, 117, 255}  // red
+// Side panel config values are in cfg (see config.odin / editor.conf)
 
 // ---------------------------------------------------------------------------
 // Panel tab selection
@@ -52,6 +36,9 @@ Side_Panel :: struct {
     visible:          bool,
     active_tab:       Panel_Tab,
     scroll_y:         int,
+    // Resizable width
+    width:            int,
+    resizing:         bool,
     // Draft display
     draft_text:       string,
     draft_ready:      bool,
@@ -68,6 +55,8 @@ side_panel_init :: proc(sp: ^Side_Panel) {
     sp.visible = false
     sp.active_tab = .Draft
     sp.scroll_y = 0
+    sp.width = cfg.side_panel_w_default
+    sp.resizing = false
     sp.draft_text = ""
     sp.draft_ready = false
     sp.draft_confidence = 0
@@ -140,45 +129,70 @@ side_panel_render :: proc(sp: ^Side_Panel, font: rl.Font, char_width: f32, win_w
     result := Side_Panel_Result{action = .None, issue_index = -1}
     spacing := f32(0)
 
-    panel_x := win_w - SIDE_PANEL_W
-    panel_y := TAB_BAR_H + TOP_MARGIN
+    pw := sp.width
+    panel_x := win_w - pw
 
-    // Background
-    rl.DrawRectangle(i32(panel_x), 0, i32(SIDE_PANEL_W), i32(win_h), SIDE_PANEL_BG)
-    // Left border
-    rl.DrawRectangle(i32(panel_x), 0, 1, i32(win_h), SIDE_PANEL_BORDER)
-
-    // Tab bar
-    tab_w := SIDE_PANEL_W / 2
     mx := int(rl.GetMouseX())
     my := int(rl.GetMouseY())
 
+    // --- Resize drag handle on left edge ---
+    drag_x := panel_x - cfg.side_panel_drag_w / 2
+    on_drag_edge := mx >= drag_x && mx <= drag_x + cfg.side_panel_drag_w
+
+    if on_drag_edge || sp.resizing {
+        rl.SetMouseCursor(.RESIZE_EW)
+    } else {
+        rl.SetMouseCursor(.DEFAULT)
+    }
+
+    if rl.IsMouseButtonPressed(.LEFT) && on_drag_edge {
+        sp.resizing = true
+    }
+    if sp.resizing {
+        if rl.IsMouseButtonDown(.LEFT) {
+            new_w := win_w - mx
+            sp.width = clamp(new_w, cfg.side_panel_w_min, min(cfg.side_panel_w_max, win_w - 200))
+            pw = sp.width
+            panel_x = win_w - pw
+        } else {
+            sp.resizing = false
+        }
+    }
+
+    // Background
+    rl.DrawRectangle(i32(panel_x), 0, i32(pw), i32(win_h), cfg.side_panel_bg)
+    // Left border
+    rl.DrawRectangle(i32(panel_x), 0, 1, i32(win_h), cfg.side_panel_border)
+
+    // Tab bar
+    tab_w := pw / 2
+
     // Draft tab
-    draft_bg := SIDE_PANEL_HEADER if sp.active_tab == .Draft else SIDE_PANEL_BG
-    rl.DrawRectangle(i32(panel_x + 1), 0, i32(tab_w), i32(SIDE_PANEL_TAB_H), draft_bg)
-    draft_tc := TAB_ACTIVE_TEXT if sp.active_tab == .Draft else TAB_TEXT
-    rl.DrawTextEx(font, "Draft", {f32(panel_x + 12), 5}, f32(FONT_SIZE - 2), spacing, draft_tc)
+    draft_bg := cfg.side_panel_header if sp.active_tab == .Draft else cfg.side_panel_bg
+    rl.DrawRectangle(i32(panel_x + 1), 0, i32(tab_w), i32(cfg.side_panel_tab_h), draft_bg)
+    draft_tc := cfg.tab_active_text if sp.active_tab == .Draft else cfg.tab_text
+    rl.DrawTextEx(font, "Draft", {f32(panel_x + 12), 5}, f32(cfg.font_size - 2), spacing, draft_tc)
     if sp.active_tab == .Draft {
-        rl.DrawRectangle(i32(panel_x + 1), i32(SIDE_PANEL_TAB_H - 2), i32(tab_w), 2, CURSOR_COLOR)
+        rl.DrawRectangle(i32(panel_x + 1), i32(cfg.side_panel_tab_h - 2), i32(tab_w), 2, cfg.cursor_color)
     }
 
     // Validation tab
     val_x := panel_x + tab_w
-    val_bg := SIDE_PANEL_HEADER if sp.active_tab == .Validation else SIDE_PANEL_BG
-    rl.DrawRectangle(i32(val_x), 0, i32(tab_w), i32(SIDE_PANEL_TAB_H), val_bg)
-    val_tc := TAB_ACTIVE_TEXT if sp.active_tab == .Validation else TAB_TEXT
+    val_bg := cfg.side_panel_header if sp.active_tab == .Validation else cfg.side_panel_bg
+    rl.DrawRectangle(i32(val_x), 0, i32(tab_w), i32(cfg.side_panel_tab_h), val_bg)
+    val_tc := cfg.tab_active_text if sp.active_tab == .Validation else cfg.tab_text
 
     // Show issue count in validation tab
     val_label_buf: [32]u8
     val_label := fmt.bprintf(val_label_buf[:], "Issues (%d)", len(sp.issues))
     val_cs := strings.clone_to_cstring(val_label, context.temp_allocator)
-    rl.DrawTextEx(font, val_cs, {f32(val_x + 12), 5}, f32(FONT_SIZE - 2), spacing, val_tc)
+    rl.DrawTextEx(font, val_cs, {f32(val_x + 12), 5}, f32(cfg.font_size - 2), spacing, val_tc)
     if sp.active_tab == .Validation {
-        rl.DrawRectangle(i32(val_x), i32(SIDE_PANEL_TAB_H - 2), i32(tab_w), 2, CURSOR_COLOR)
+        rl.DrawRectangle(i32(val_x), i32(cfg.side_panel_tab_h - 2), i32(tab_w), 2, cfg.cursor_color)
     }
 
-    // Tab clicks
-    if rl.IsMouseButtonPressed(.LEFT) && mx >= panel_x && my < SIDE_PANEL_TAB_H {
+    // Tab clicks (only if not resizing)
+    if !sp.resizing && rl.IsMouseButtonPressed(.LEFT) && mx >= panel_x && my < cfg.side_panel_tab_h {
         if mx < val_x {
             sp.active_tab = .Draft
         } else {
@@ -188,7 +202,7 @@ side_panel_render :: proc(sp: ^Side_Panel, font: rl.Font, char_width: f32, win_w
     }
 
     // Content area
-    content_y := SIDE_PANEL_TAB_H + 4
+    content_y := cfg.side_panel_tab_h + 4
     content_h := win_h - content_y
 
     switch sp.active_tab {
@@ -196,6 +210,43 @@ side_panel_render :: proc(sp: ^Side_Panel, font: rl.Font, char_width: f32, win_w
         result = side_panel_render_draft(sp, font, char_width, panel_x, content_y, content_h, win_w, mx, my)
     case .Validation:
         result = side_panel_render_validation(sp, font, char_width, panel_x, content_y, content_h, mx, my)
+    }
+
+    // Ctrl+C to copy panel content when mouse is over the panel
+    if mx >= panel_x {
+        ctrl_held := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
+        if ctrl_held && rl.IsKeyPressed(.C) {
+            if sp.active_tab == .Draft && sp.draft_ready && len(sp.draft_text) > 0 {
+                cstr := strings.clone_to_cstring(sp.draft_text, context.temp_allocator)
+                rl.SetClipboardText(cstr)
+            } else if sp.active_tab == .Validation && len(sp.issues) > 0 {
+                // Copy the hovered issue, or all issues if not hovering one
+                copied := false
+                issue_y := cfg.side_panel_tab_h + 4 - sp.scroll_y * cfg.side_panel_line_h
+                for i := 0; i < len(sp.issues); i += 1 {
+                    row_y := issue_y + i * (cfg.side_panel_line_h * 2 + 4)
+                    if my >= row_y && my < row_y + cfg.side_panel_line_h * 2 {
+                        cstr := strings.clone_to_cstring(sp.issues[i].message, context.temp_allocator)
+                        rl.SetClipboardText(cstr)
+                        copied = true
+                        break
+                    }
+                }
+                if !copied {
+                    // Copy all issues as text
+                    b := strings.builder_make(context.temp_allocator)
+                    for &issue, i in sp.issues {
+                        if i > 0 do strings.write_byte(&b, '\n')
+                        line_buf: [64]u8
+                        prefix := fmt.bprintf(line_buf[:], "Ln %d: ", issue.line + 1)
+                        strings.write_string(&b, prefix)
+                        strings.write_string(&b, issue.message)
+                    }
+                    cstr := strings.clone_to_cstring(strings.to_string(b), context.temp_allocator)
+                    rl.SetClipboardText(cstr)
+                }
+            }
+        }
     }
 
     // Scroll wheel within panel
@@ -218,15 +269,15 @@ side_panel_render_draft :: proc(sp: ^Side_Panel, font: rl.Font, char_width: f32,
     spacing := f32(0)
 
     if sp.drafting {
-        rl.DrawTextEx(font, "Drafting...", {f32(panel_x + 12), f32(content_y + 20)}, FONT_SIZE, spacing, rl.Color{229, 192, 123, 255})
-        rl.DrawTextEx(font, "(this may take 30s)", {f32(panel_x + 12), f32(content_y + 42)}, f32(FONT_SIZE - 2), spacing, rl.Color{100, 100, 100, 255})
+        rl.DrawTextEx(font, "Drafting...", {f32(panel_x + 12), f32(content_y + 20)}, f32(cfg.font_size), spacing, rl.Color{229, 192, 123, 255})
+        rl.DrawTextEx(font, "(this may take 30s)", {f32(panel_x + 12), f32(content_y + 42)}, f32(cfg.font_size - 2), spacing, rl.Color{100, 100, 100, 255})
         return result
     }
 
     if !sp.draft_ready {
         msg := "No draft available"
         mc := strings.clone_to_cstring(msg, context.temp_allocator)
-        rl.DrawTextEx(font, mc, {f32(panel_x + 12), f32(content_y + 20)}, FONT_SIZE, spacing, rl.Color{100, 100, 100, 255})
+        rl.DrawTextEx(font, mc, {f32(panel_x + 12), f32(content_y + 20)}, f32(cfg.font_size), spacing, rl.Color{100, 100, 100, 255})
         return result
     }
 
@@ -234,11 +285,11 @@ side_panel_render_draft :: proc(sp: ^Side_Panel, font: rl.Font, char_width: f32,
     conf_buf: [32]u8
     conf_str := fmt.bprintf(conf_buf[:], "Confidence: %.0f%%", sp.draft_confidence * 100)
     cc := strings.clone_to_cstring(conf_str, context.temp_allocator)
-    rl.DrawTextEx(font, cc, {f32(panel_x + 12), f32(content_y + 4)}, f32(FONT_SIZE - 2), spacing, rl.Color{120, 120, 120, 255})
+    rl.DrawTextEx(font, cc, {f32(panel_x + 12), f32(content_y + 4)}, f32(cfg.font_size - 2), spacing, rl.Color{120, 120, 120, 255})
 
     // Draft text with word wrapping
-    text_y := content_y + 24 - sp.scroll_y * SIDE_PANEL_LINE_H
-    max_chars_per_line := (SIDE_PANEL_W - 24) / int(char_width)
+    text_y := content_y + 24 - sp.scroll_y * cfg.side_panel_line_h
+    max_chars_per_line := (sp.width - 24) / int(char_width)
     if max_chars_per_line < 1 do max_chars_per_line = 1
 
     draft := sp.draft_text
@@ -264,29 +315,29 @@ side_panel_render_draft :: proc(sp: ^Side_Panel, font: rl.Font, char_width: f32,
                 display = display[:len(display)-1]
             }
             sc := strings.clone_to_cstring(string(display), context.temp_allocator)
-            rl.DrawTextEx(font, sc, {f32(panel_x + 12), f32(text_y)}, FONT_SIZE, spacing, SIDE_PANEL_TEXT)
+            rl.DrawTextEx(font, sc, {f32(panel_x + 12), f32(text_y)}, f32(cfg.font_size), spacing, cfg.side_panel_text)
         }
-        text_y += SIDE_PANEL_LINE_H
+        text_y += cfg.side_panel_line_h
         line_start = line_end
     }
 
     // Buttons at bottom
-    btn_y := content_y + content_h - SIDE_PANEL_BTN_H * 2 - 12
-    btn_w := (SIDE_PANEL_W - 36) / 2
+    btn_y := content_y + content_h - cfg.side_panel_btn_h * 2 - 12
+    btn_w := (sp.width - 36) / 2
 
     // Accept button
     accept_x := panel_x + 12
-    accept_hover := mx >= accept_x && mx < accept_x + btn_w && my >= btn_y && my < btn_y + SIDE_PANEL_BTN_H
-    accept_bg := SIDE_PANEL_BTN_HOV if accept_hover else SIDE_PANEL_BTN_BG
-    rl.DrawRectangle(i32(accept_x), i32(btn_y), i32(btn_w), i32(SIDE_PANEL_BTN_H), accept_bg)
-    rl.DrawTextEx(font, "Accept", {f32(accept_x + 8), f32(btn_y + 4)}, f32(FONT_SIZE - 2), spacing, rl.Color{152, 195, 121, 255})
+    accept_hover := mx >= accept_x && mx < accept_x + btn_w && my >= btn_y && my < btn_y + cfg.side_panel_btn_h
+    accept_bg := cfg.side_panel_btn_hov if accept_hover else cfg.side_panel_btn_bg
+    rl.DrawRectangle(i32(accept_x), i32(btn_y), i32(btn_w), i32(cfg.side_panel_btn_h), accept_bg)
+    rl.DrawTextEx(font, "Accept", {f32(accept_x + 8), f32(btn_y + 4)}, f32(cfg.font_size - 2), spacing, rl.Color{152, 195, 121, 255})
 
     // Dismiss button
     dismiss_x := accept_x + btn_w + 12
-    dismiss_hover := mx >= dismiss_x && mx < dismiss_x + btn_w && my >= btn_y && my < btn_y + SIDE_PANEL_BTN_H
-    dismiss_bg := SIDE_PANEL_BTN_HOV if dismiss_hover else SIDE_PANEL_BTN_BG
-    rl.DrawRectangle(i32(dismiss_x), i32(btn_y), i32(btn_w), i32(SIDE_PANEL_BTN_H), dismiss_bg)
-    rl.DrawTextEx(font, "Dismiss", {f32(dismiss_x + 8), f32(btn_y + 4)}, f32(FONT_SIZE - 2), spacing, rl.Color{224, 108, 117, 255})
+    dismiss_hover := mx >= dismiss_x && mx < dismiss_x + btn_w && my >= btn_y && my < btn_y + cfg.side_panel_btn_h
+    dismiss_bg := cfg.side_panel_btn_hov if dismiss_hover else cfg.side_panel_btn_bg
+    rl.DrawRectangle(i32(dismiss_x), i32(btn_y), i32(btn_w), i32(cfg.side_panel_btn_h), dismiss_bg)
+    rl.DrawTextEx(font, "Dismiss", {f32(dismiss_x + 8), f32(btn_y + 4)}, f32(cfg.font_size - 2), spacing, rl.Color{224, 108, 117, 255})
 
     if rl.IsMouseButtonPressed(.LEFT) {
         if accept_hover do result.action = .Accept_Draft
@@ -306,30 +357,30 @@ side_panel_render_validation :: proc(sp: ^Side_Panel, font: rl.Font, char_width:
     if len(sp.issues) == 0 {
         msg := "No issues"
         mc := strings.clone_to_cstring(msg, context.temp_allocator)
-        rl.DrawTextEx(font, mc, {f32(panel_x + 12), f32(content_y + 20)}, FONT_SIZE, spacing, rl.Color{100, 100, 100, 255})
+        rl.DrawTextEx(font, mc, {f32(panel_x + 12), f32(content_y + 20)}, f32(cfg.font_size), spacing, rl.Color{100, 100, 100, 255})
         return result
     }
 
-    y := content_y - sp.scroll_y * SIDE_PANEL_LINE_H
+    y := content_y - sp.scroll_y * cfg.side_panel_line_h
     for i := 0; i < len(sp.issues); i += 1 {
         issue := &sp.issues[i]
-        row_y := y + i * (SIDE_PANEL_LINE_H * 2 + 4)
+        row_y := y + i * (cfg.side_panel_line_h * 2 + 4)
 
-        if row_y + SIDE_PANEL_LINE_H * 2 < content_y do continue
+        if row_y + cfg.side_panel_line_h * 2 < content_y do continue
         if row_y >= content_y + content_h do break
 
         // Hover highlight
-        is_hover := mx >= panel_x && mx < panel_x + SIDE_PANEL_W && my >= row_y && my < row_y + SIDE_PANEL_LINE_H * 2
+        is_hover := mx >= panel_x && mx < panel_x + sp.width && my >= row_y && my < row_y + cfg.side_panel_line_h * 2
         if is_hover {
-            rl.DrawRectangle(i32(panel_x + 1), i32(row_y), i32(SIDE_PANEL_W - 1), i32(SIDE_PANEL_LINE_H * 2), rl.Color{40, 40, 40, 255})
+            rl.DrawRectangle(i32(panel_x + 1), i32(row_y), i32(sp.width - 1), i32(cfg.side_panel_line_h * 2), rl.Color{40, 40, 40, 255})
         }
 
         // Severity dot
         sev_color: rl.Color
         switch issue.severity {
-        case .Info:    sev_color = SEVERITY_INFO_CLR
-        case .Warning: sev_color = SEVERITY_WARNING_CLR
-        case .Error:   sev_color = SEVERITY_ERROR_CLR
+        case .Info:    sev_color = cfg.severity_info_clr
+        case .Warning: sev_color = cfg.severity_warning_clr
+        case .Error:   sev_color = cfg.severity_error_clr
         }
         dot_x := panel_x + 12
         dot_y := row_y + 6
@@ -339,16 +390,16 @@ side_panel_render_validation :: proc(sp: ^Side_Panel, font: rl.Font, char_width:
         loc_buf: [32]u8
         loc_str := fmt.bprintf(loc_buf[:], "Ln %d, Col %d", issue.line + 1, issue.col + 1)
         lc := strings.clone_to_cstring(loc_str, context.temp_allocator)
-        rl.DrawTextEx(font, lc, {f32(dot_x + 14), f32(row_y + 2)}, f32(FONT_SIZE - 2), spacing, sev_color)
+        rl.DrawTextEx(font, lc, {f32(dot_x + 14), f32(row_y + 2)}, f32(cfg.font_size - 2), spacing, sev_color)
 
         // Message (truncated to fit)
-        max_msg_chars := (SIDE_PANEL_W - 30) / int(char_width)
+        max_msg_chars := (sp.width - 30) / int(char_width)
         msg := issue.message
         if len(msg) > max_msg_chars && max_msg_chars > 3 {
             msg = msg[:max_msg_chars - 3]
         }
         mc := strings.clone_to_cstring(msg, context.temp_allocator)
-        rl.DrawTextEx(font, mc, {f32(panel_x + 12), f32(row_y + SIDE_PANEL_LINE_H)}, f32(FONT_SIZE - 2), spacing, SIDE_PANEL_TEXT)
+        rl.DrawTextEx(font, mc, {f32(panel_x + 12), f32(row_y + cfg.side_panel_line_h)}, f32(cfg.font_size - 2), spacing, cfg.side_panel_text)
 
         // Click to jump
         if rl.IsMouseButtonPressed(.LEFT) && is_hover {

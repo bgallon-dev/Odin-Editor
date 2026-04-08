@@ -4,48 +4,6 @@ import rl "vendor:raylib"
 import "core:time"
 import "core:os"
 
-// ---------------------------------------------------------------------------
-// Editor config
-// ---------------------------------------------------------------------------
-WINDOW_W       :: 1100
-WINDOW_H       :: 700
-FONT_SIZE      :: 20
-LINE_HEIGHT    :: 24
-GUTTER_W       :: 50       // line numbers
-TOP_MARGIN     :: 10
-CURSOR_BLINK   :: 0.5
-SEARCH_BAR_H   :: 28
-DOUBLE_CLICK_T :: 0.35
-TAB_BAR_H      :: 28
-TAB_W          :: 140
-MINIMAP_W      :: 60
-MINIMAP_CHAR_W :: 1.5
-MINIMAP_LINE_H :: 3
-
-// Colors
-BG_COLOR         :: rl.Color{30,  30,  30,  255}
-TEXT_COLOR        :: rl.Color{212, 212, 212, 255}
-CURSOR_COLOR     :: rl.Color{220, 220, 170, 255}
-LINENUM_COLOR    :: rl.Color{100, 100, 100, 255}
-SEL_COLOR        :: rl.Color{60,  90,  150, 120}
-STATUS_BG        :: rl.Color{50,  50,  50,  255}
-STATUS_FG        :: rl.Color{180, 180, 180, 255}
-CURLINE_COLOR    :: rl.Color{40,  40,  40,  255}
-STATUS_WARN_BG   :: rl.Color{120, 60,  30,  255}
-SEARCH_BG        :: rl.Color{45,  45,  45,  255}
-SEARCH_BORDER    :: rl.Color{80,  80,  80,  255}
-SEARCH_MATCH_CLR :: rl.Color{180, 140, 50,  80}
-SEARCH_CUR_MATCH :: rl.Color{220, 170, 60,  120}
-TAB_BG           :: rl.Color{40,  40,  40,  255}
-TAB_ACTIVE_BG    :: rl.Color{30,  30,  30,  255}
-TAB_BORDER       :: rl.Color{60,  60,  60,  255}
-TAB_TEXT         :: rl.Color{160, 160, 160, 255}
-TAB_ACTIVE_TEXT  :: rl.Color{220, 220, 220, 255}
-BRACKET_HL       :: rl.Color{255, 255, 100, 60}
-MINIMAP_BG       :: rl.Color{25,  25,  25,  255}
-MINIMAP_VIEW     :: rl.Color{80,  80,  80,  40}
-MINIMAP_TEXT     :: rl.Color{120, 120, 120, 180}
-
 DOCS_DIR :: "documents"
 
 // ---------------------------------------------------------------------------
@@ -77,27 +35,29 @@ Editor_State :: struct {
 
 // Compute dynamic left margin (gutter + optional sidebar)
 get_left_margin :: proc(ed: ^Editor_State) -> int {
-    base := GUTTER_W
-    if ed.file_browser.visible do base += SIDEBAR_W
+    base := cfg.gutter_w
+    if ed.file_browser.visible do base += cfg.sidebar_w
     return base
 }
 
 // Compute text area right edge (minus optional minimap)
 get_right_margin :: proc(ed: ^Editor_State) -> int {
     w := int(rl.GetScreenWidth())
-    if ed.show_minimap do w -= MINIMAP_W
-    if ed.side_panel.visible do w -= SIDE_PANEL_W
+    if ed.show_minimap do w -= cfg.minimap_w
+    if ed.side_panel.visible do w -= ed.side_panel.width
     return w
 }
 
 get_text_top :: proc() -> int {
-    return TOP_MARGIN + TAB_BAR_H
+    return cfg.top_margin + cfg.tab_bar_h
 }
 
 // ---------------------------------------------------------------------------
 main :: proc() {
+    cfg = config_load("editor.conf")
+
     rl.SetConfigFlags({.WINDOW_RESIZABLE})
-    rl.InitWindow(WINDOW_W, WINDOW_H, "Odin Editor")
+    rl.InitWindow(i32(cfg.window_w), i32(cfg.window_h), "Odin Editor")
     rl.SetTargetFPS(60)
     rl.SetExitKey(.KEY_NULL)
 
@@ -130,7 +90,7 @@ editor_init :: proc(ed: ^Editor_State) {
     ed.font = load_editor_font()
     rl.SetTextureFilter(ed.font.texture, .BILINEAR)
 
-    m := rl.MeasureTextEx(ed.font, "M", FONT_SIZE, 0)
+    m := rl.MeasureTextEx(ed.font, "M", f32(cfg.font_size), 0)
     ed.char_width = m.x
 
     tab_bar_init(&ed.tab_bar)
@@ -173,7 +133,7 @@ editor_destroy :: proc(ed: ^Editor_State) {
 // ---------------------------------------------------------------------------
 load_editor_font :: proc() -> rl.Font {
     // Tier 1: bundled font relative to executable
-    font := rl.LoadFontEx("fonts/consola.ttf", FONT_SIZE, nil, 256)
+    font := rl.LoadFontEx("fonts/consola.ttf", i32(cfg.font_size), nil, 256)
     if font.texture.id != 0 do return font
 
     // Tier 2: platform system fonts
@@ -183,7 +143,7 @@ load_editor_font :: proc() -> rl.Font {
             "C:\\Windows\\Fonts\\cour.ttf",
         }
         for p in sys_paths {
-            font = rl.LoadFontEx(p, FONT_SIZE, nil, 256)
+            font = rl.LoadFontEx(p, i32(cfg.font_size), nil, 256)
             if font.texture.id != 0 do return font
         }
     } else when ODIN_OS == .Linux {
@@ -193,7 +153,7 @@ load_editor_font :: proc() -> rl.Font {
             "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
         }
         for p in sys_paths {
-            font = rl.LoadFontEx(p, FONT_SIZE, nil, 256)
+            font = rl.LoadFontEx(p, i32(cfg.font_size), nil, 256)
             if font.texture.id != 0 do return font
         }
     } else when ODIN_OS == .Darwin {
@@ -203,7 +163,7 @@ load_editor_font :: proc() -> rl.Font {
             "/Library/Fonts/Courier New.ttf",
         }
         for p in sys_paths {
-            font = rl.LoadFontEx(p, FONT_SIZE, nil, 256)
+            font = rl.LoadFontEx(p, i32(cfg.font_size), nil, 256)
             if font.texture.id != 0 do return font
         }
     }
@@ -222,13 +182,13 @@ current_time_ms :: proc() -> i64 {
 
 get_visible_lines :: proc(ed: ^Editor_State) -> int {
     h := int(rl.GetScreenHeight())
-    bottom := LINE_HEIGHT
+    bottom := cfg.line_height
     buf := tab_active_buf(&ed.tab_bar)
     if buf.find.active {
-        bottom += SEARCH_BAR_H
-        if buf.find.show_replace do bottom += SEARCH_BAR_H
+        bottom += cfg.search_bar_h
+        if buf.find.show_replace do bottom += cfg.search_bar_h
     }
-    return (h - get_text_top() - bottom) / LINE_HEIGHT
+    return (h - get_text_top() - bottom) / cfg.line_height
 }
 
 get_max_scroll :: proc(ed: ^Editor_State) -> int {

@@ -6,6 +6,7 @@ Uses urllib (no openai package required).
 """
 
 import json
+import socket
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 LM_STUDIO_BASE = "http://127.0.0.1:1234"
 DRAFTER_MODEL = "ibm/granite-4-h-tiny"  # fast MoE model
 VALIDATOR_MODEL = "qwen/qwen3.5-9b"  # deep reasoning model
-TIMEOUT_DRAFTER = 90  # seconds — Granite is fast
+TIMEOUT_DRAFTER = 300  # seconds — includes prompt processing time
 TIMEOUT_VALIDATOR = 1200  # seconds — Devstral is thorough
 
 
@@ -63,19 +64,35 @@ def call_lm_studio(
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
+            data = json.loads(raw)
 
-        message = data["choices"][0]["message"]
-        choice = message.get("content", "") or ""
-        reasoning = message.get("reasoning_content", "") or ""
-        usage = data.get("usage", {})
+            choice = data.get("choices", [{}])[0]
+            message = choice.get("message", {})
+            text = message.get("content", "")
+            reasoning = message.get("reasoning_content", "")
+
+            usage = data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+
         return LMResponse(
-            text=choice,
+            text=text,
             model=model,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
             success=True,
             reasoning_content=reasoning,
+        )
+
+    except (socket.timeout, TimeoutError):
+        return LMResponse(
+            text="",
+            model=model,
+            prompt_tokens=0,
+            completion_tokens=0,
+            success=False,
+            error=f"LM Studio timed out after {timeout}s",
         )
 
     except urllib.error.URLError as e:
